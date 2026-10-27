@@ -4,15 +4,24 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "generate:calligraphy": "node scripts/generate-calligraphy.mjs",
+    "predev": "npm run generate:calligraphy",
+    "prebuild": "npm run generate:calligraphy",
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
+    "@fontsource/archivo-black": "5.3.0",
+    "@fontsource/caveat": "5.2.8",
+    "@fontsource/ibm-plex-mono": "5.3.0",
+    "@fontsource/mrs-saint-delafield": "5.3.0",
     "@fontsource/nanum-brush-script": "5.3.0",
+    "@fontsource/nanum-gothic-coding": "5.2.7",
     "@fontsource/nanum-pen-script": "5.3.0"
   },
   "devDependencies": {
+    "fontkit": "2.0.4",
     "vite": "8.3.5"
   }
 }

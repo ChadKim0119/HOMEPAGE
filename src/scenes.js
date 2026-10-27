@@ -1,6 +1,6 @@
 // Replace `lines` with final copy, or set `artwork` to an uploaded image URL.
 // Layout, palette, and motion remain independent of the artwork.
-export const scenes = [
+const originalScenes = [
   { title: '여백의 미', english: 'The art of empty space', category: 'light', theme: 'white', layout: 'center', lines: ['마음이 머무는 곳에,', '당신의 이야기를 씁니다.'], note: '비워낸 공간에, 오롯이 당신의 마음을 담아.', mood: '순백 · 먹 · 고요', effect: 'ink', label: '여백에 마음을 담다' },
   { title: '밤에 쓰는 편지', english: 'A letter to the night', category: 'dark', theme: 'black', layout: 'center', lines: ['가장 깊은 밤에도', '당신은 빛나고 있습니다.'], note: '어둠이 깊어질수록, 더 또렷해지는 한 문장.', mood: '흑백 · 빛 · 깊이', effect: 'glow' },
   { title: '종이의 온도', english: 'The warmth of paper', category: 'texture', theme: 'kraft', layout: 'paper', lines: ['서툰 마음도 괜찮아,', '천천히 피어나면 되니까.'], note: '손끝에 닿는 질감처럼, 오래 남는 다정함.', mood: '크래프트 · 온기 · 손글씨', effect: 'tilt' },
@@ -22,3 +22,45 @@ export const scenes = [
   { title: '깊은 숨', english: 'A moment to breathe', category: 'dark', theme: 'deep-green', layout: 'enso', lines: ['잠시 멈추어도 괜찮아,', '너는 충분히 잘하고 있어.'], note: '빈틈이 생겨야, 새로운 숨이 들어온다.', mood: '초록 · 호흡 · 휴식', effect: 'glow' },
   { title: '다시, 여백', english: 'Every ending, a beginning', category: 'light', theme: 'final', layout: 'center', lines: ['비워둔 마음의 자리에', '새로운 이야기가 시작된다.'], note: '스무 개의 장면, 그리고 당신의 첫 문장.', mood: '순백 · 시작 · 가능성', effect: 'ink' },
 ];
+
+const translations = [
+  { lines: ['Where the heart rests,', 'your story begins.'], note: 'A little less noise. A little more room for you.', mood: 'White · Ink · Stillness' },
+  { lines: ['Even in the deepest night,', 'you are a little light.'], note: 'The darker the night, the brighter the words.', mood: 'Black · Light · Depth' },
+  { lines: ['It is alright to be unfinished.', 'Bloom in your own time.'], note: 'A warmth that stays, like paper beneath your fingers.', mood: 'Kraft · Warmth · Handwritten' },
+  { lines: ['Little moments, gathered.', 'A pattern we call us.'], note: 'An everyday rhythm. An extraordinary connection.', mood: 'Repetition · Rhythm · Connection' },
+  { lines: ['Wherever your footsteps fall,', 'a quiet spring begins.'], note: 'One day, a new season finds its way into the heart.', mood: 'Sage · Spring · Beginnings' },
+  { lines: ['Let the hours flow.', 'Some things stay with us.'], note: 'A drop of ink, slowly becoming a landscape.', mood: 'Rice paper · Ink · Flow' },
+  { lines: ['Hold tomorrow gently,', 'with the heart you have today.'], note: 'A small promise, before the world wakes.', mood: 'Navy · Dawn · Hope' },
+  { lines: ['Instead of asking how you are,', 'I am sending you a flower.'], note: 'Sometimes tenderness arrives before the words.', mood: 'Blush · Tenderness · A hello' },
+  { lines: ['Look a little longer.', 'Small things become forests.'], note: 'Wander between the words. Remember to breathe.', mood: 'Forest · Vertical · Rhythm' },
+  { lines: ['Inside an old memory,', 'the sunlight still remains.'], note: 'A faded page. A moment made vivid again.', mood: 'Vintage · Paper · Memory' },
+  { lines: ['Some moments pass.', 'Some feelings never leave.'], note: 'A fleeting encounter. A lasting impression.', mood: 'Vermilion · Feeling · Afterglow' },
+  { lines: ['Go where your heart wanders.', 'Your season will find you.'], note: 'Travel lightly, toward a place that feels like you.', mood: 'Sky · Wind · Freedom' },
+  { lines: ['A thousand times over,', 'with a first-time kind of love.'], note: 'The same words. A new feeling, every time.', mood: 'Type · Monochrome · Repetition' },
+  { lines: ['Even on the unsteady days,', 'your roots are growing.'], note: 'A quiet kind of strength. A place to lean on.', mood: 'Stone · Texture · Strength' },
+  { lines: ['You do not have to say a word.', 'Your day was full of light.'], note: 'At the end of the day, the moon understands.', mood: 'Moon · Night · Comfort' },
+  { lines: ['May this ordinary day', 'become a favorite memory.'], note: 'The everyday magic of simply being here.', mood: 'Butter · Everyday · Joy' },
+  { lines: ['From the warmth of your hands,', 'a little world unfolds.'], note: 'Every handmade thing carries a little of its maker.', mood: 'Linen · Craft · Hands' },
+  { lines: ['In the little word love,', 'all your seasons live.'], note: 'One small word. A thousand ways to mean it.', mood: 'Coral · Love · Rhythm' },
+  { lines: ['You can pause for a moment.', 'You are doing enough.'], note: 'Make a little space. Let a little air in.', mood: 'Green · Breath · Rest' },
+  { lines: ['In the space you leave open,', 'a new story begins.'], note: 'An ending, a blank page, and your next first word.', mood: 'White · Beginnings · Possibility' },
+];
+
+const effects = ['ink', 'glow', 'tilt', 'drift', 'brush', 'ink', 'glow', 'type', 'brush', 'type', 'brush', 'float', 'type', 'ink', 'glow', 'type', 'brush', 'drift', 'glow', 'brush'];
+
+export const scenes = [
+  {
+    id: 'notes-on', reference: true, title: '효율 너머의 쉼', english: 'A pause beyond efficiency',
+    category: 'light', theme: 'notes', layout: 'reference', effect: 'brush',
+    lines: ['효율 너머, 잠시 쉬어가는 시간.'],
+    note: '소음을 걷어내고, 진정 소중한 것에 마음을 기울이세요.', mood: '크림 · 쉼 · 기록',
+    en: { lines: ['A Pause beyond Efficiency.'], note: 'Clear the noise and note what truly matters.', mood: 'Cream · Pause · Presence' },
+  },
+  ...originalScenes.map((scene, index) => ({ ...scene, id: `original-${index}`, en: translations[index], effect: effects[index] })),
+];
+
+export function localizeScene(scene, language) {
+  return language === 'en'
+    ? { ...scene, title: scene.english, lines: scene.en.lines, note: scene.en.note, mood: scene.en.mood, label: scene.english }
+    : scene;
+}
