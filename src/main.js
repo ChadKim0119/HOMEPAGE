@@ -10,6 +10,8 @@ import './enhancements.css';
 import { scenes, localizeScene } from './scenes.js';
 import { copy } from './i18n.js';
 import { SceneMotion } from './motion.js';
+import { analyzeInk } from './strokes.js';
+import { Writer, WRITING_EFFECTS } from './writing.js';
 import { loadCandidates, replaceCandidates, clearCandidates, isImageFile } from './compare.js';
 const artworkModules = import.meta.glob('./generated/*.json');
 const brushArt = {};
@@ -30,6 +32,13 @@ const paths = {
   bookmark: '<path d="M6 3h12v18l-6-4-6 4z"/>', close: '<path d="m6 6 12 12M6 18 18 6"/>',
   compare: '<rect x="3" y="4" width="7.5" height="16"/><rect x="13.5" y="4" width="7.5" height="16"/>', upload: '<path d="M12 16V4m-5 5 5-5 5 5M4 20h16"/>', folder: '<path d="M3 6h6l2 2h10v11H3z"/>',
   paper: '<path d="M5 3h10l4 4v14H5z"/><path d="M9 12h6M9 16h4"/>',
+  play: '<path d="M8 5.5v13l10.5-6.5z" fill="currentColor" stroke="none"/>', stop: '<rect x="7" y="7" width="10" height="10" rx="1" fill="currentColor" stroke="none"/>',
+  chevron: '<path d="m7 14.5 5-5 5 5"/>',
+  'fx-brush': '<path d="M14.5 4.5 19.5 9.5 11 18c-1.5 1.5-4 2-6.5 1.5.5-2.5 0-4.5 1.5-6z"/><path d="m13 6 5 5"/>',
+  'fx-pen': '<path d="M12 3 7 12l5 9 5-9z"/><path d="M12 3v8"/><circle cx="12" cy="12.5" r="1.2"/>',
+  'fx-bleed': '<path d="M12 3.5c3.5 4.5 5.5 7.6 5.5 10.5a5.5 5.5 0 0 1-11 0c0-2.9 2-6 5.5-10.5z"/><path d="M9.5 14.5a2.5 2.5 0 0 0 2.5 2.5"/>',
+  'fx-dry': '<path d="M4 7c5-1 11 1 16-1M4 11c3-.6 6 .4 9 0M15 11h5M4 15c4-1 9 1 16-1M6 19c3-.6 6 0 8-.5"/>',
+  'fx-light': '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6.3 6.3l2.5 2.5M15.2 15.2l2.5 2.5M6.3 17.7l2.5-2.5M15.2 8.8l2.5-2.5"/>',
   left: '<path d="m15 5-7 7 7 7"/>', right: '<path d="m9 5 7 7-7 7"/>',
   focus: '<path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/>', replay: '<path d="M3 10a9 9 0 1 1 2 8M3 4v6h6"/>',
 };
@@ -58,6 +67,11 @@ let candidateIndex = 0;
 let comparing = false;
 let thumbsOpen = false;
 let showOriginal = false;
+let writeEffect = WRITING_EFFECTS.includes(readStorage('yeobaek-write-effect', 'brush')) ? readStorage('yeobaek-write-effect', 'brush') : 'brush';
+let writer = null;
+let effectMenuOpen = false;
+let previewWriters = [];
+const strokeCache = new Map();
 const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
 const motion = new SceneMotion(reduced);
 const text = () => copy[language];
@@ -103,6 +117,8 @@ function referenceChrome() {
 }
 
 function render() {
+  writer?.stop(); writer = null;
+  stopPreviews(); effectMenuOpen = false;
   observer?.disconnect();
   motion.stop();
   const t = text();
@@ -155,13 +171,14 @@ function renderCompareDialog() {
 
 function compareHudMarkup() {
   const t = text();
-  return `<div class="compare-hud guide" role="region" aria-label="${t.hudLabel}"><div class="compare-tray" ${thumbsOpen ? '' : 'hidden'}>${candidates.map((candidate, i) => `<button class="compare-thumb" data-candidate="${i}" aria-label="${pad(i + 1)}. ${esc(candidate.name)}"><img src="${esc(candidate.url)}" alt=""><span>${pad(i + 1)}</span></button>`).join('')}</div><div class="compare-bar"><button class="compare-step" data-action="candidate-prev" aria-label="${t.prevCandidate}">${icon('left')}</button><div class="compare-status" aria-live="polite"><b class="compare-count"></b><span class="compare-name"></span></div><button class="compare-step" data-action="candidate-next" aria-label="${t.nextCandidate}">${icon('right')}</button><span class="compare-divider"></span><button class="compare-tool" data-action="compare-thumbs" aria-pressed="${thumbsOpen}" aria-label="${t.showThumbs}" title="${t.showThumbs}">${icon('grid')}</button><button class="compare-tool" data-action="compare-original" aria-pressed="${showOriginal}" aria-label="${t.showOriginal}" title="${t.showOriginal}">${icon('paper')}</button><button class="compare-tool" data-action="compare" aria-label="${t.loadAgain}" title="${t.loadAgain}">${icon('upload')}</button><button class="compare-tool" data-action="compare-exit" aria-label="${t.exitCompare}" title="${t.exitCompare}">${icon('close')}</button></div><p class="compare-keys">${t.compareKeys}</p></div>`;
+  return `<div class="compare-hud guide" role="region" aria-label="${t.hudLabel}"><div class="effect-menu" role="menu" aria-label="${t.writingEffect}" hidden><p class="effect-menu-title">${t.writingEffect}<span>${t.effectMenuHint}</span></p><div class="effect-items">${WRITING_EFFECTS.map((fx) => `<button class="effect-item" role="menuitemradio" aria-checked="${fx === writeEffect}" data-effect="${fx}"><span class="effect-preview" data-preview="${fx}"></span><span class="effect-copy"><b>${icon(`fx-${fx}`)}${t.effects[fx][0]}</b><small>${t.effects[fx][1]}</small></span></button>`).join('')}</div></div><div class="compare-tray" ${thumbsOpen ? '' : 'hidden'}>${candidates.map((candidate, i) => `<button class="compare-thumb" data-candidate="${i}" aria-label="${pad(i + 1)}. ${esc(candidate.name)}"><img src="${esc(candidate.url)}" alt=""><span>${pad(i + 1)}</span></button>`).join('')}</div><div class="compare-bar"><button class="compare-step" data-action="candidate-prev" aria-label="${t.prevCandidate}">${icon('left')}</button><div class="compare-status" aria-live="polite"><b class="compare-count"></b><span class="compare-name"></span></div><button class="compare-step" data-action="candidate-next" aria-label="${t.nextCandidate}">${icon('right')}</button><span class="compare-divider"></span><div class="write-group"><button class="compare-play" data-action="write-play" aria-label="${t.playWriting}" title="${t.playWriting}"><span class="play-icon">${icon('play')}</span><span class="play-fx">${icon(`fx-${writeEffect}`)}</span></button><button class="compare-effect" data-action="write-menu" aria-haspopup="menu" aria-expanded="false" aria-label="${t.writingEffect}: ${t.effects[writeEffect][0]}" title="${t.writingEffect}"><span class="effect-name">${t.effects[writeEffect][0]}</span>${icon('chevron')}</button></div><span class="compare-divider"></span><button class="compare-tool" data-action="compare-thumbs" aria-pressed="${thumbsOpen}" aria-label="${t.showThumbs}" title="${t.showThumbs}">${icon('grid')}</button><button class="compare-tool" data-action="compare-original" aria-pressed="${showOriginal}" aria-label="${t.showOriginal}" title="${t.showOriginal}">${icon('paper')}</button><button class="compare-tool" data-action="compare" aria-label="${t.loadAgain}" title="${t.loadAgain}">${icon('upload')}</button><button class="compare-tool" data-action="compare-exit" aria-label="${t.exitCompare}" title="${t.exitCompare}">${icon('close')}</button></div><p class="compare-keys">${t.compareKeys}</p></div>`;
 }
 
 // Swaps the active scene's calligraphy for the current candidate, keeping the
 // scene's background, layout, chrome and pointer effects untouched.
 function applyCandidate() {
   if (!comparing || !candidates.length) return;
+  stopWriter();
   const candidate = candidates[candidateIndex];
   const holder = sections()[active].querySelector('.artwork');
   holder.innerHTML = art({ ...sceneAt(active), artwork: showOriginal ? candidate.url : candidate.inkUrl, lines: [candidate.name] });
@@ -173,6 +190,113 @@ function applyCandidate() {
     if (i === candidateIndex) { thumb.setAttribute('aria-current', 'true'); if (thumbsOpen) thumb.scrollIntoView({ block: 'nearest', inline: 'center' }); }
     else thumb.removeAttribute('aria-current');
   });
+  if (effectMenuOpen) startPreviews();
+}
+
+// ---- Writing playback: the candidate is written out stroke by stroke. ----
+function strokesFor(candidate) {
+  if (!strokeCache.has(candidate.inkUrl)) strokeCache.set(candidate.inkUrl, analyzeInk(candidate.inkUrl).catch(() => null));
+  return strokeCache.get(candidate.inkUrl);
+}
+
+function markPlaying(playing) {
+  const button = document.querySelector('.compare-play');
+  if (!button) return;
+  const t = text();
+  button.classList.toggle('is-playing', playing);
+  button.querySelector('.play-icon').innerHTML = icon(playing ? 'stop' : 'play');
+  button.setAttribute('aria-label', playing ? t.stopWriting : t.playWriting);
+  button.title = playing ? t.stopWriting : t.playWriting;
+}
+
+function stopWriter() {
+  writer?.stop();
+  writer = null;
+  markPlaying(false);
+}
+
+async function playWriting() {
+  if (!comparing || !candidates.length) return;
+  if (writer?.playing) { applyCandidate(); return; } // second press: stop and show the finished work
+  closeEffectMenu();
+  stopWriter();
+  const candidate = candidates[candidateIndex];
+  const button = document.querySelector('.compare-play');
+  button?.classList.add('is-loading');
+  const analysis = await strokesFor(candidate);
+  button?.classList.remove('is-loading');
+  if (!comparing || candidates[candidateIndex] !== candidate) return;
+  if (!analysis?.strokes.length) { toast(text().noStrokes); return; }
+  const target = sections()[active].querySelector('.candidate-artwork');
+  if (!target) return;
+  if (target.tagName === 'IMG' && !target.complete) await target.decode().catch(() => {});
+  const rect = target.getBoundingClientRect();
+  const run = new Writer(analysis, writeEffect, {
+    href: candidate.inkUrl, reduced: reduced.matches,
+    onDone: () => { if (writer !== run) return; writer = null; markPlaying(false); if (showOriginal) applyCandidate(); },
+  });
+  run.element.classList.add('custom-artwork', 'candidate-artwork', 'writing-artwork');
+  if (rect.width && rect.height) Object.assign(run.element.style, { width: `${rect.width}px`, height: `${rect.height}px` });
+  target.replaceWith(run.element);
+  writer = run;
+  markPlaying(true);
+  run.play();
+}
+
+function stopPreviews() {
+  previewWriters.forEach((w) => w.stop());
+  previewWriters = [];
+}
+
+// Each menu item loops its effect on the current candidate, so the effect is
+// recognisable at a glance.
+async function startPreviews() {
+  const candidate = candidates[candidateIndex];
+  const slots = [...document.querySelectorAll('.effect-preview')];
+  stopPreviews();
+  slots.forEach((slot) => { slot.innerHTML = `<i class="preview-wait">${text().readingStrokes}</i>`; });
+  const analysis = await strokesFor(candidate);
+  if (!effectMenuOpen || candidates[candidateIndex] !== candidate) return;
+  if (!analysis?.strokes.length) { slots.forEach((slot) => { slot.innerHTML = `<i class="preview-wait">${text().noStrokes}</i>`; }); return; }
+  stopPreviews();
+  slots.forEach((slot) => {
+    const w = new Writer(analysis, slot.dataset.preview, { href: candidate.inkUrl, loop: true, target: .4, reduced: reduced.matches });
+    slot.replaceChildren(w.element);
+    w.play();
+    previewWriters.push(w);
+  });
+}
+
+function openEffectMenu() {
+  const menu = document.querySelector('.effect-menu');
+  if (!menu || !comparing) return;
+  effectMenuOpen = true;
+  menu.hidden = false;
+  document.querySelector('.compare-effect').setAttribute('aria-expanded', 'true');
+  menu.querySelector(`[data-effect="${writeEffect}"]`)?.focus({ preventScroll: true });
+  startPreviews();
+}
+
+function closeEffectMenu() {
+  if (!effectMenuOpen) return;
+  effectMenuOpen = false;
+  stopPreviews();
+  const menu = document.querySelector('.effect-menu');
+  if (menu) menu.hidden = true;
+  document.querySelector('.compare-effect')?.setAttribute('aria-expanded', 'false');
+}
+
+function chooseEffect(effect) {
+  const t = text();
+  writeEffect = effect;
+  try { localStorage.setItem('yeobaek-write-effect', JSON.stringify(effect)); } catch { /* Kept for this visit. */ }
+  document.querySelectorAll('.effect-item').forEach((item) => item.setAttribute('aria-checked', String(item.dataset.effect === effect)));
+  document.querySelector('.play-fx').innerHTML = icon(`fx-${effect}`);
+  document.querySelector('.effect-name').textContent = t.effects[effect][0];
+  document.querySelector('.compare-effect').setAttribute('aria-label', `${t.writingEffect}: ${t.effects[effect][0]}`);
+  closeEffectMenu();
+  document.querySelector('.compare-play')?.focus({ preventScroll: true });
+  playWriting();
 }
 
 function restoreArtwork(index) {
@@ -190,6 +314,8 @@ function startCompare() {
 
 function stopCompare() {
   if (!comparing) return;
+  stopWriter();
+  closeEffectMenu();
   comparing = false;
   document.body.classList.remove('is-comparing');
   restoreArtwork(active);
@@ -366,6 +492,7 @@ function updateClock() {
 
 document.addEventListener('click', (event) => {
   const button = event.target.closest('button');
+  if (effectMenuOpen && !event.target.closest('.effect-menu, [data-action="write-menu"]')) closeEffectMenu();
   if (button) {
     if (button.hasAttribute('data-close')) { button.closest('dialog').close(); return; }
     if (button.dataset.language) { setLanguage(button.dataset.language); return; }
@@ -376,6 +503,7 @@ document.addEventListener('click', (event) => {
       document.querySelectorAll('[data-filter]').forEach((el) => { el.classList.toggle('selected', el.dataset.filter === filter); el.setAttribute('aria-pressed', String(el.dataset.filter === filter)); });
       renderGallery(); return;
     }
+    if (button.dataset.effect) { chooseEffect(button.dataset.effect); return; }
     if (button.dataset.candidate !== undefined) { stepCandidate(0, Number(button.dataset.candidate)); return; }
     if (button.classList.contains('saved-filter')) { savedOnly = !savedOnly; button.setAttribute('aria-pressed', String(savedOnly)); renderGallery(); return; }
     if (button.classList.contains('filter-reset')) {
@@ -399,6 +527,8 @@ document.addEventListener('click', (event) => {
         button.setAttribute('aria-pressed', String(showOriginal));
         toast(showOriginal ? text().originalOn : text().originalOff);
         applyCandidate(); break;
+      case 'write-play': playWriting(); break;
+      case 'write-menu': if (effectMenuOpen) closeEffectMenu(); else openEffectMenu(); break;
       case 'candidate-prev': stepCandidate(-1); break;
       case 'candidate-next': stepCandidate(1); break;
       case 'compare-thumbs':
@@ -473,6 +603,15 @@ document.addEventListener('keydown', (event) => {
   const editing = event.target.isContentEditable || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName);
   if (editing || event.metaKey || event.ctrlKey || event.altKey || event.repeat || document.querySelector('dialog[open]')) return;
   if (event.code === 'KeyF' || event.key.toLowerCase() === 'f' || event.key === 'ㄹ') { event.preventDefault(); toggleFocus(); return; }
+  if (comparing && effectMenuOpen) {
+    const items = [...document.querySelectorAll('.effect-item')];
+    const at = items.indexOf(document.activeElement);
+    const moves = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 };
+    if (event.key in moves) { event.preventDefault(); items[(Math.max(0, at) + moves[event.key] + items.length) % items.length].focus(); return; }
+    if (event.key === 'Escape') { event.preventDefault(); closeEffectMenu(); document.querySelector('.compare-effect')?.focus({ preventScroll: true }); return; }
+    return; // Enter / Space act on the focused effect
+  }
+  if (comparing && (event.code === 'Space' || event.key === ' ')) { event.preventDefault(); playWriting(); return; }
   if (comparing) {
     const steps = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 };
     if (event.key in steps) { event.preventDefault(); stepCandidate(steps[event.key]); return; }
@@ -485,6 +624,10 @@ document.addEventListener('keydown', (event) => {
     event.preventDefault();
     goTo(event.key === 'Home' ? 0 : event.key === 'End' ? scenes.length - 1 : active + (['ArrowDown', 'PageDown'].includes(event.key) ? 1 : -1));
   }
+});
+// Space writes in comparison mode; keep it from also activating a focused button.
+document.addEventListener('keyup', (event) => {
+  if (comparing && !effectMenuOpen && (event.code === 'Space' || event.key === ' ') && !/INPUT|TEXTAREA|SELECT/.test(event.target.tagName)) event.preventDefault();
 });
 document.addEventListener('fullscreenchange', () => {
   if (!document.fullscreenElement && nativeFullscreen) { nativeFullscreen = false; applyFocus(false); }
