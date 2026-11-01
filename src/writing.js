@@ -1,174 +1,347 @@
-// Writes a calligraphy image back onto the page, stroke by stroke. Every
-// effect uses the recovered stroke centre lines as an SVG mask over the real
-// ink (the technique used by stroke-order animators), so the finished frame is
-// always the original artwork. Effects differ in tempo, brush pressure, edge
-// texture and what happens to the ink after each stroke.
+// Writes a calligraphy image back onto the page, one brush movement at a
+// time. `analyzeInk` (strokes.js) tells every ink pixel which stroke it
+// belongs to and how far along that stroke it lies; from that and a tempo we
+// build a "time map" — the moment each pixel is touched by the brush. A WebGL
+// shader then reveals the original ink as the brush front sweeps across the
+// full width of a stroke in a single pass, the way the After Effects
+// "mask + stroke, reveal original image" write-on technique works, but
+// without hand-drawn masks. The last frame is always the original artwork.
 
 export const WRITING_EFFECTS = ['brush', 'pen', 'bleed', 'dry', 'light'];
 
 const easeInOutCubic = (t) => (t < .5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
 const easeInOutSine = (t) => -(Math.cos(Math.PI * t) - 1) / 2;
 const clamp = (v) => Math.min(1, Math.max(0, v));
-// Dash offset for a stroke drawn to `p`. The gap is longer than the path and the
-// hidden offset overshoots slightly, so no zero-length dash (which would still
-// paint a round cap) ever sits on an unwritten stroke.
-const offset = (p) => ((1 - clamp(p)) * 1.01).toFixed(4);
 
-// tempo: stroke speed multiplier; pauses (ms): between strokes, characters, lines.
+// tempo: stroke speed multiplier; pauses (ms): within a character, between
+// characters, between lines; ease: brush speed along a stroke (press → draw → lift).
 const STYLES = {
-  // Press, draw, lift: slow entry and exit with a breath between strokes.
-  brush: { tempo: 1, pauses: [170, 340, 520], ease: (t) => .72 * easeInOutCubic(t) + .28 * t },
-  // A steady nib: near-constant speed, short lifts.
-  pen: { tempo: 1.45, pauses: [70, 170, 280], ease: (t) => .35 * easeInOutSine(t) + .65 * t },
-  // Wet ink spreads, then is drawn in sharp as the paper absorbs it.
-  bleed: { tempo: .9, pauses: [210, 380, 560], ease: (t) => .7 * easeInOutCubic(t) + .3 * t, settle: 1500 },
-  // Quick dry strokes leave bristle texture that fills as ink soaks in.
-  dry: { tempo: 1.2, pauses: [130, 300, 450], ease: (t) => 1 - (1 - t) ** 2.2, settle: 1300 },
-  // A point of light traces the line and leaves ink behind.
-  light: { tempo: 1.05, pauses: [120, 260, 420], ease: easeInOutSine, settle: 900 },
+  brush: { id: 0, tempo: 1, pauses: [190, 380, 560], ease: (t) => .72 * easeInOutCubic(t) + .28 * t, settle: 450 },
+  pen: { id: 1, tempo: 1.4, pauses: [80, 190, 300], ease: (t) => .3 * easeInOutSine(t) + .7 * t, settle: 0 },
+  bleed: { id: 2, tempo: .9, pauses: [220, 400, 580], ease: (t) => .7 * easeInOutCubic(t) + .3 * t, settle: 1500 },
+  dry: { id: 3, tempo: 1.2, pauses: [140, 320, 470], ease: (t) => 1 - (1 - t) ** 2.2, settle: 1100 },
+  light: { id: 4, tempo: 1.05, pauses: [130, 280, 440], ease: easeInOutSine, settle: 900 },
 };
 
-let uid = 0;
-
+// Start time and duration of every stroke. Strokes that continue the same
+// pen movement (joined-up script) follow without a lift.
 function timeline(strokes, style, target) {
   const total = strokes.reduce((sum, s) => sum + s.length, 0) || 1;
-  const writing = Math.min(6200, Math.max(2600, 1200 + strokes.length * 80)) * target;
-  const pauseTotal = strokes.reduce((sum, s, i) => {
-    if (!i) return sum;
-    const prev = strokes[i - 1];
-    return sum + style.pauses[prev.line !== s.line ? 2 : prev.char !== s.char ? 1 : 0];
-  }, 0);
-  const pauseScale = Math.min(1, 2600 / (pauseTotal || 1)) * target;
-  let t = 120 * target;
+  const writing = Math.min(5600, Math.max(2400, 1200 + strokes.length * 80)) * target;
+  const gap = (s, prev) => (s.flow ? 0 : style.pauses[prev.line !== s.line ? 2 : prev.char !== s.char ? 1 : 0]);
+  const pauseTotal = strokes.reduce((sum, s, i) => sum + (i ? gap(s, strokes[i - 1]) : 0), 0);
+  const pauseScale = Math.min(1, 2400 / (pauseTotal || 1)) * target;
+  let t = 150 * target;
   return strokes.map((s, i) => {
-    if (i) {
-      const prev = strokes[i - 1];
-      t += style.pauses[prev.line !== s.line ? 2 : prev.char !== s.char ? 1 : 0] * pauseScale;
-    }
-    const duration = Math.max(150 * target, (s.length / total) * writing / style.tempo);
-    const item = { start: t, end: t + duration, duration };
+    if (i) t += gap(s, strokes[i - 1]) * pauseScale;
+    const duration = Math.max(170 * target, (s.length / total) * writing / style.tempo);
+    const item = { start: t, end: t + duration, duration, linear: s.flow || strokes[i + 1]?.flow };
     t += duration;
     return item;
   });
 }
 
-function markup(analysis, effect, id, href) {
-  const { width: W, height: H, strokes } = analysis;
-  const avg = strokes.reduce((sum, s) => sum + s.width, 0) / (strokes.length || 1) || 10;
-  const box = `x="0" y="0" width="${W}" height="${H}"`;
-  const paths = (cls, widthScale = 1, extra = '') => strokes.map((s, i) => `<path class="${cls}" data-i="${i}" d="${s.d}" fill="none" stroke="white" stroke-width="${(s.width * widthScale).toFixed(1)}" stroke-linecap="round" stroke-linejoin="round" pathLength="1" stroke-dasharray="1 2" stroke-dashoffset="1.01" ${extra}/>`).join('');
-  const image = (attrs = '') => `<image class="ink-layer" href="${href}" ${box} preserveAspectRatio="none" ${attrs}/>`;
-  const final = `<rect class="w-final" ${box} fill="white" opacity="0"/>`;
-  const region = `x="${-W * .1}" y="${-H * .1}" width="${W * 1.2}" height="${H * 1.2}"`;
-  const roughEdge = (scale, freq = 1.1) => `<filter id="${id}-edge" filterUnits="userSpaceOnUse" ${region}><feTurbulence type="fractalNoise" baseFrequency="${(freq / avg).toFixed(4)}" numOctaves="2" seed="7" result="noise"/><feDisplacementMap in="SourceGraphic" in2="noise" scale="${(avg * scale).toFixed(1)}" xChannelSelector="R" yChannelSelector="G"/></filter>`;
-  let defs = '', body = '';
-  if (effect === 'brush') {
-    defs = `${roughEdge(.32)}<mask id="${id}-m" maskUnits="userSpaceOnUse" ${region}><g filter="url(#${id}-edge)">${paths('w-reveal', 1.08)}</g>${final}</mask>`;
-    body = image(`mask="url(#${id}-m)"`);
-  } else if (effect === 'pen') {
-    defs = `<mask id="${id}-m" maskUnits="userSpaceOnUse" ${region}>${paths('w-reveal')}${final}</mask>`;
-    body = `${image(`mask="url(#${id}-m)"`)}<circle class="w-tip w-nib" r="${Math.max(1.2, avg * .16).toFixed(1)}" opacity="0"/>`;
-  } else if (effect === 'bleed') {
-    defs = `${roughEdge(.5, .7)}<filter id="${id}-wet" filterUnits="userSpaceOnUse" ${region}><feMorphology operator="dilate" radius="${(avg * .12).toFixed(1)}"/><feGaussianBlur stdDeviation="${(avg * .42).toFixed(1)}"/></filter>`
-      + `<mask id="${id}-mw" maskUnits="userSpaceOnUse" ${region}><g filter="url(#${id}-edge)">${paths('w-wet', 1.9, 'stroke-opacity="0"')}</g></mask>`
-      + `<mask id="${id}-m" maskUnits="userSpaceOnUse" ${region}><g filter="url(#${id}-edge)">${paths('w-reveal', 1.05)}</g>${final}</mask>`;
-    body = `<g filter="url(#${id}-wet)" opacity=".62"><g mask="url(#${id}-mw)">${image()}</g></g>${image(`mask="url(#${id}-m)"`)}`;
-  } else if (effect === 'dry') {
-    defs = `<filter id="${id}-bristle" filterUnits="userSpaceOnUse" ${region}><feTurbulence type="fractalNoise" baseFrequency="${(1.1 / avg).toFixed(4)} ${(2.8 / avg).toFixed(4)}" numOctaves="4" seed="3" result="noise"/><feColorMatrix in="noise" type="matrix" values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 4.2 -1.55" result="hair"/><feComposite in="SourceGraphic" in2="hair" operator="in"/></filter>${roughEdge(.22, 1.6)}`
-      + `<mask id="${id}-m" maskUnits="userSpaceOnUse" ${region}><g filter="url(#${id}-bristle)">${paths('w-reveal', 1.1)}</g><g filter="url(#${id}-edge)">${paths('w-fill', 1.06, 'stroke-dashoffset="0" stroke-opacity="0"')}</g>${final}</mask>`;
-    body = image(`mask="url(#${id}-m)"`);
-  } else {
-    defs = `<radialGradient id="${id}-glow"><stop offset="0" stop-color="#fffaf0"/><stop offset=".28" stop-color="#ffe2a3" stop-opacity=".95"/><stop offset=".6" stop-color="#e9b55c" stop-opacity=".35"/><stop offset="1" stop-color="#e9b55c" stop-opacity="0"/></radialGradient>`
-      + `<filter id="${id}-blur" filterUnits="userSpaceOnUse" ${region}><feGaussianBlur stdDeviation="${(avg * .22).toFixed(1)}"/></filter>`
-      + `<mask id="${id}-m" maskUnits="userSpaceOnUse" ${region}>${paths('w-reveal')}${final}</mask>`;
-    body = `${image(`mask="url(#${id}-m)"`)}<g class="w-trails" filter="url(#${id}-blur)">${strokes.map((s, i) => `<path class="w-trail" data-i="${i}" d="${s.d}" fill="none" stroke="#f3c46b" stroke-width="${(s.width * .55).toFixed(1)}" stroke-linecap="round" pathLength="1" stroke-dasharray="1 2" stroke-dashoffset="1.01" opacity="0"/>`).join('')}</g><circle class="w-tip w-glow" r="${(avg * 1.5).toFixed(1)}" fill="url(#${id}-glow)" opacity="0"/>`;
+// Inverse of an easing curve as a lookup table: arc fraction → time fraction.
+function inverseEase(ease) {
+  const N = 512;
+  const forward = new Float32Array(N + 1);
+  for (let i = 0; i <= N; i++) forward[i] = ease(i / N);
+  const inv = new Float32Array(N + 1);
+  let j = 0;
+  for (let i = 0; i <= N; i++) {
+    const u = i / N;
+    while (j < N && forward[j + 1] < u) j++;
+    const a = forward[j], b = forward[Math.min(N, j + 1)];
+    inv[i] = (j + (b > a ? clamp((u - a) / (b - a)) : 0)) / N;
   }
-  return `<svg class="writing-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-hidden="true"><defs>${defs}</defs>${body}</svg>`;
+  return (u) => { const x = clamp(u) * N, i = Math.floor(x); return i >= N ? inv[N] : inv[i] + (inv[i + 1] - inv[i]) * (x - i); };
+}
+
+function loadImage(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = url;
+  });
+}
+
+const VERTEX = `#version 300 es
+in vec2 aPos;
+out vec2 vUv;
+void main() { vUv = vec2(aPos.x * .5 + .5, .5 - aPos.y * .5); gl_Position = vec4(aPos, 0., 1.); }`;
+
+const FRAGMENT = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 outColor;
+uniform sampler2D uInk;
+uniform sampler2D uTimeMap;
+uniform sampler2D uDirMap;
+uniform int uEffect;
+uniform float uTime, uSettle, uDark, uBlurLod, uTipOn, uTipR, uAvg;
+uniform vec2 uInkSize, uTip;
+
+float hash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float vnoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p), u = f * f * (3. - 2. * f);
+  return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
+}
+float fbm(vec2 p) { float v = 0., a = .5; for (int k = 0; k < 4; k++) { v += a * vnoise(p); p = p * 2.03 + 17.1; a *= .5; } return v; }
+
+void main() {
+  vec4 ink = texture(uInk, vUv);
+  float T = texture(uTimeMap, vUv).r;
+  float age = uTime - T;
+  vec2 px = vUv * uInkSize;
+  vec3 col = uDark > .5 ? vec3(.93) : ink.rgb;
+  vec3 c = col;
+  float a = 0.;
+  if (uEffect == 0) {
+    // Brush: a soft, fibrous front; wet ink is a little darker until it sets.
+    float j = (fbm(px / (uAvg * .5)) - .5) * 160.;
+    a = ink.a * smoothstep(0., 110., age + j);
+    float wet = 1. - smoothstep(0., uSettle, age);
+    c = uDark > .5 ? col : col * (1. - .3 * wet);
+  } else if (uEffect == 1) {
+    // Pen: a crisp front that follows the nib.
+    a = ink.a * smoothstep(0., 26., age);
+  } else if (uEffect == 2) {
+    // Ink bleed: a wet bloom spreads ahead, then the line sharpens as the paper drinks it.
+    float j = (fbm(px / (uAvg * .4)) - .5) * 240.;
+    float sharp = smoothstep(160., 340., age + j);
+    float soft = textureLod(uInk, vUv, uBlurLod).a;
+    float wet = smoothstep(0., 140., age + j) * (1. - smoothstep(0., uSettle, age - 220.));
+    float halo = min(1., soft * 1.7) * wet * .55;
+    a = max(ink.a * sharp, halo);
+    vec3 wash = uDark > .5 ? vec3(.78) : mix(col, vec3(.42, .40, .37), .4);
+    c = mix(wash, col, clamp(ink.a * sharp / max(a, 1e-4), 0., 1.));
+  } else if (uEffect == 3) {
+    // Dry brush: bristle streaks along the stroke appear first, then fill.
+    float ang = texture(uDirMap, vUv).r;
+    vec2 q = mat2(cos(ang), -sin(ang), sin(ang), cos(ang)) * px;
+    float n = fbm(vec2(q.x / (uAvg * 2.4), q.y / (uAvg * .085)));
+    float delay = pow(clamp((n - .28) / .5, 0., 1.), 1.25) * uSettle;
+    a = ink.a * smoothstep(0., 70., age - delay);
+  } else {
+    // Light trace: freshly written ink glows gold, then cools to ink.
+    a = ink.a * smoothstep(0., 40., age);
+    float glow = step(0., age) * (1. - smoothstep(0., uSettle, age));
+    c = mix(col, vec3(1., .80, .42), glow * .85);
+  }
+  vec3 rgb = c * a;
+  if (uTipOn > 0.) {
+    float d = distance(px, uTip);
+    if (uEffect == 1) {
+      float nib = uTipOn * (1. - smoothstep(uTipR - .8, uTipR + .8, d));
+      vec3 nc = uDark > .5 ? vec3(.93) : vec3(.10, .098, .082);
+      rgb = mix(rgb, nc, nib); a = max(a, nib);
+    } else if (uEffect == 4) {
+      float g = uTipOn * exp(-d * d / (2. * uTipR * uTipR));
+      float core = uTipOn * exp(-d * d / (.18 * uTipR * uTipR));
+      rgb = rgb * (1. - g * .45) + vec3(1., .78, .38) * g * .85 + vec3(1., .97, .9) * core;
+      a = max(a, max(g * .75, core));
+    }
+  }
+  outColor = vec4(rgb, a);
+}`;
+
+function compile(gl, type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+  return shader;
 }
 
 export class Writer {
-  constructor(analysis, effect, { href, loop = false, target = 1, reduced = false, onDone } = {}) {
+  constructor(analysis, effect, { href, loop = false, target = 1, reduced = false, dark = false, onDone } = {}) {
     this.analysis = analysis;
     this.effect = WRITING_EFFECTS.includes(effect) ? effect : 'brush';
     this.style = STYLES[this.effect];
     this.loop = loop;
     this.reduced = reduced;
+    this.dark = dark;
     this.onDone = onDone;
-    const holder = document.createElement('div');
-    holder.innerHTML = markup(analysis, this.effect, `w${++uid}`, href);
-    this.element = holder.firstElementChild;
     this.items = timeline(analysis.strokes, this.style, target);
-    const byIndex = (cls) => { const list = []; this.element.querySelectorAll(`.${cls}`).forEach((el) => { list[+el.dataset.i] = el; }); return list; };
-    this.reveal = byIndex('w-reveal');
-    this.wet = byIndex('w-wet');
-    this.fill = byIndex('w-fill');
-    this.trail = byIndex('w-trail');
-    this.final = this.element.querySelector('.w-final');
-    this.tip = this.element.querySelector('.w-tip');
-    this.lengths = [];
     const last = this.items.length ? this.items[this.items.length - 1].end : 0;
-    this.finishAt = last + 120;
-    this.doneAt = this.finishAt + 650 + (this.style.settle || 0);
+    this.finishAt = last + 80;
+    this.doneAt = this.finishAt + 500 + this.style.settle;
+    this.element = document.createElement('canvas');
+    this.element.className = 'writing-canvas';
+    this.element.setAttribute('aria-hidden', 'true');
     this.frame = this.frame.bind(this);
+    this.ready = loadImage(href).then((image) => this.setup(image));
+  }
+
+  // When each map pixel is touched by the brush, for this effect's tempo.
+  timeMap() {
+    const { owner, arc } = this.analysis.map;
+    const inv = inverseEase(this.style.ease);
+    const T = new Float32Array(owner.length);
+    for (let p = 0; p < owner.length; p++) {
+      const o = owner[p];
+      if (o === -2) { T[p] = 1e7; continue; }
+      if (o === -1) { T[p] = this.finishAt; continue; } // specks and gaps: with the last stroke
+      const it = this.items[o];
+      T[p] = it.start + it.duration * (it.linear ? arc[p] : inv(arc[p]));
+    }
+    return T;
+  }
+
+  setup(image) {
+    const { map } = this.analysis;
+    this.T = this.timeMap();
+    const gl = this.element.getContext('webgl2', { premultipliedAlpha: true, alpha: true, antialias: false });
+    if (!gl) { this.setupCpu(image); return; }
+    try {
+      const program = gl.createProgram();
+      gl.attachShader(program, compile(gl, gl.VERTEX_SHADER, VERTEX));
+      gl.attachShader(program, compile(gl, gl.FRAGMENT_SHADER, FRAGMENT));
+      gl.linkProgram(program);
+      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+      gl.useProgram(program);
+      const buffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+      const loc = gl.getAttribLocation(program, 'aPos');
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+      const texture = (unit, setup) => {
+        const tex = gl.createTexture();
+        gl.activeTexture(gl.TEXTURE0 + unit);
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        setup();
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      };
+      texture(0, () => {
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+        gl.generateMipmap(gl.TEXTURE_2D);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      });
+      const floatTex = (unit, data) => texture(unit, () => {
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, map.width, map.height, 0, gl.RED, gl.FLOAT, data);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      });
+      floatTex(1, this.T);
+      floatTex(2, map.dir);
+      const u = (name) => gl.getUniformLocation(program, name);
+      this.u = Object.fromEntries(['uTime', 'uSettle', 'uDark', 'uBlurLod', 'uTipOn', 'uTipR', 'uAvg', 'uInkSize', 'uTip', 'uEffect', 'uInk', 'uTimeMap', 'uDirMap'].map((n) => [n, u(n)]));
+      gl.uniform1i(this.u.uInk, 0);
+      gl.uniform1i(this.u.uTimeMap, 1);
+      gl.uniform1i(this.u.uDirMap, 2);
+      gl.uniform1i(this.u.uEffect, this.style.id);
+      const avg = this.analysis.strokeWidth || 10;
+      gl.uniform1f(this.u.uSettle, this.style.settle || 1);
+      gl.uniform1f(this.u.uDark, this.dark ? 1 : 0);
+      gl.uniform1f(this.u.uAvg, avg);
+      gl.uniform1f(this.u.uBlurLod, Math.max(0, Math.log2(Math.max(1, avg * .55))));
+      gl.uniform1f(this.u.uTipR, this.effect === 'pen' ? Math.max(1.6, avg * .2) : avg * 1.5);
+      gl.uniform2f(this.u.uInkSize, this.analysis.width, this.analysis.height);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      this.gl = gl;
+    } catch (error) {
+      console.warn('Writing effect falls back to 2D:', error);
+      this.setupCpu(image);
+    }
+  }
+
+  // Without WebGL2: the same time map, revealed on a 2D canvas.
+  setupCpu(image) {
+    const { map } = this.analysis;
+    const canvas = document.createElement('canvas');
+    canvas.width = map.width; canvas.height = map.height;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(image, 0, 0, map.width, map.height);
+    this.cpuInk = ctx.getImageData(0, 0, map.width, map.height);
+    this.cpuOut = new ImageData(map.width, map.height);
+    this.element.width = map.width; this.element.height = map.height;
+    this.cpu = this.element.getContext('2d');
+  }
+
+  size(width, height) {
+    const ratio = this.analysis.width / this.analysis.height;
+    let w = width, h = width / ratio;
+    if (h > height) { h = height; w = height * ratio; }
+    this.element.style.width = `${w}px`;
+    this.element.style.height = `${h}px`;
+    if (this.gl) {
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      this.element.width = Math.max(1, Math.round(Math.min(w * dpr, this.analysis.width)));
+      this.element.height = Math.max(1, Math.round(Math.min(h * dpr, this.analysis.height)));
+    }
   }
 
   play() {
     this.stop();
-    if (this.reduced) { this.render(Infinity); this.final.setAttribute('opacity', '1'); this.onDone?.(); return; }
+    if (this.reduced) { this.render(this.doneAt); this.onDone?.(); return; }
     this.started = performance.now();
     this.raf = requestAnimationFrame(this.frame);
   }
 
   stop() { cancelAnimationFrame(this.raf); this.raf = 0; }
 
+  destroy() {
+    this.stop();
+    this.destroyed = true;
+    this.gl?.getExtension('WEBGL_lose_context')?.loseContext();
+    this.gl = null;
+  }
+
   get playing() { return Boolean(this.raf); }
 
   frame(now) {
+    if (this.destroyed) return;
     let t = now - this.started;
     if (this.loop && t > this.doneAt + 900) { this.started = now; t = 0; }
-    this.render(t);
+    try { this.render(t); } catch (error) { console.warn('Writing frame failed:', error); }
     if (!this.loop && t >= this.doneAt) { this.raf = 0; this.onDone?.(); return; }
     this.raf = requestAnimationFrame(this.frame);
   }
 
-  pointAt(i, progress) {
-    const path = this.reveal[i];
-    if (!path) return null;
-    if (this.lengths[i] === undefined) this.lengths[i] = path.getTotalLength();
-    return path.getPointAtLength(progress * this.lengths[i]);
+  // Position of the brush tip (image pixels) for the effects that show one.
+  tip(t) {
+    if (this.effect !== 'pen' && this.effect !== 'light') return null;
+    const i = this.items.findIndex((it) => t >= it.start && t < it.end + 120);
+    if (i < 0) return null;
+    const it = this.items[i], s = this.analysis.strokes[i];
+    const raw = clamp((t - it.start) / it.duration);
+    const fade = t > it.end ? 1 - (t - it.end) / 120 : 1;
+    if (s.points.length < 2) return { x: s.points[0][0], y: s.points[0][1], on: fade };
+    const at = (it.linear ? raw : this.style.ease(raw)) * s.length;
+    let k = 1;
+    while (k < s.cum.length - 1 && s.cum[k] < at) k++;
+    const a = s.points[k - 1], b = s.points[k];
+    const f = clamp((at - s.cum[k - 1]) / ((s.cum[k] - s.cum[k - 1]) || 1));
+    return { x: a[0] + (b[0] - a[0]) * f, y: a[1] + (b[1] - a[1]) * f, on: fade };
   }
 
   render(t) {
-    const { ease, settle = 0 } = this.style;
-    let active = -1, activeProgress = 0, lastEnded = -1;
-    this.items.forEach((item, i) => {
-      const raw = clamp((t - item.start) / item.duration);
-      const p = ease(raw);
-      if (raw > 0 && raw < 1) { active = i; activeProgress = p; }
-      if (raw >= 1) lastEnded = i;
-      const after = t - item.end;
-      if (this.effect === 'bleed') {
-        // The wet bloom leads; the sharp line follows as the paper takes the ink.
-        this.wet[i]?.setAttribute('stroke-dashoffset', offset(p * 1.12));
-        this.wet[i]?.setAttribute('stroke-opacity', raw <= 0 ? 0 : after < 0 ? .95 : .95 * (1 - clamp(after / settle)));
-        this.reveal[i]?.setAttribute('stroke-dashoffset', offset(ease(clamp((t - item.start - 160) / item.duration))));
-      } else {
-        this.reveal[i]?.setAttribute('stroke-dashoffset', offset(p));
-      }
-      if (this.effect === 'dry') this.fill[i]?.setAttribute('stroke-opacity', clamp((after - 220) / (settle - 220)));
-      if (this.effect === 'light') {
-        this.trail[i]?.setAttribute('stroke-dashoffset', offset(p));
-        this.trail[i]?.setAttribute('opacity', raw <= 0 ? 0 : after < 0 ? 1 : 1 - clamp(after / settle));
-      }
-    });
-    if (this.tip) {
-      let pt = null, visible = 0;
-      if (active >= 0) { pt = this.pointAt(active, activeProgress); visible = 1; }
-      else if (lastEnded >= 0 && t - this.items[lastEnded].end < 160) { pt = this.pointAt(lastEnded, 1); visible = 1 - (t - this.items[lastEnded].end) / 160; }
-      if (pt) { this.tip.setAttribute('cx', pt.x); this.tip.setAttribute('cy', pt.y); }
-      this.tip.setAttribute('opacity', visible.toFixed(2));
+    if (this.gl) {
+      const gl = this.gl;
+      gl.viewport(0, 0, this.element.width, this.element.height);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.uniform1f(this.u.uTime, t);
+      const tip = this.tip(t);
+      gl.uniform1f(this.u.uTipOn, tip ? tip.on : 0);
+      if (tip) gl.uniform2f(this.u.uTip, tip.x, tip.y);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      return;
     }
-    // Close any gaps the centre lines missed, so the last frame is the artwork.
-    this.final?.setAttribute('opacity', clamp((t - this.finishAt) / 650));
+    if (!this.cpu) return;
+    const src = this.cpuInk.data, out = this.cpuOut.data, T = this.T;
+    for (let p = 0, i = 0; p < T.length; p++, i += 4) {
+      const a = src[i + 3] * clamp((t - T[p]) / 60);
+      if (this.dark) { out[i] = out[i + 1] = out[i + 2] = 237; } else { out[i] = src[i]; out[i + 1] = src[i + 1]; out[i + 2] = src[i + 2]; }
+      out[i + 3] = a;
+    }
+    this.cpu.putImageData(this.cpuOut, 0, 0);
   }
 }

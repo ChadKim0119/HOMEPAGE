@@ -210,7 +210,7 @@ function markPlaying(playing) {
 }
 
 function stopWriter() {
-  writer?.stop();
+  writer?.destroy();
   writer = null;
   markPlaying(false);
 }
@@ -218,6 +218,7 @@ function stopWriter() {
 async function playWriting() {
   if (!comparing || !candidates.length) return;
   if (writer?.playing) { applyCandidate(); return; } // second press: stop and show the finished work
+  if (writer && !writer.playing) applyCandidate(); // replay from a blank page
   closeEffectMenu();
   stopWriter();
   const candidate = candidates[candidateIndex];
@@ -232,19 +233,24 @@ async function playWriting() {
   if (target.tagName === 'IMG' && !target.complete) await target.decode().catch(() => {});
   const rect = target.getBoundingClientRect();
   const run = new Writer(analysis, writeEffect, {
-    href: candidate.inkUrl, reduced: reduced.matches,
-    onDone: () => { if (writer !== run) return; writer = null; markPlaying(false); if (showOriginal) applyCandidate(); },
+    href: candidate.inkUrl, reduced: reduced.matches, dark: document.body.dataset.dark === 'true',
+    // The finished canvas stays on the page (it is the artwork) until replaced.
+    onDone: () => { if (writer !== run) return; markPlaying(false); if (showOriginal) applyCandidate(); },
   });
-  run.element.classList.add('custom-artwork', 'candidate-artwork', 'writing-artwork');
-  if (rect.width && rect.height) Object.assign(run.element.style, { width: `${rect.width}px`, height: `${rect.height}px` });
-  target.replaceWith(run.element);
+  writer?.destroy();
   writer = run;
   markPlaying(true);
+  try { await run.ready; } catch { if (writer === run) { writer = null; markPlaying(false); } toast(text().noStrokes); return; }
+  if (writer !== run || !target.isConnected) { run.destroy(); return; }
+  run.element.classList.add('custom-artwork', 'candidate-artwork', 'writing-artwork');
+  run.size(rect.width || target.naturalWidth || 600, rect.height || target.naturalHeight || 300);
+  target.replaceWith(run.element);
   run.play();
 }
 
 function stopPreviews() {
-  previewWriters.forEach((w) => w.stop());
+  previewWriters.forEach((w) => w.destroy());
+  document.querySelectorAll('.effect-preview canvas').forEach((c) => c.remove());
   previewWriters = [];
 }
 
@@ -259,11 +265,15 @@ async function startPreviews() {
   if (!effectMenuOpen || candidates[candidateIndex] !== candidate) return;
   if (!analysis?.strokes.length) { slots.forEach((slot) => { slot.innerHTML = `<i class="preview-wait">${text().noStrokes}</i>`; }); return; }
   stopPreviews();
-  slots.forEach((slot) => {
-    const w = new Writer(analysis, slot.dataset.preview, { href: candidate.inkUrl, loop: true, target: .4, reduced: reduced.matches });
+  const writers = slots.map((slot) => new Writer(analysis, slot.dataset.preview, { href: candidate.inkUrl, loop: true, target: .4, reduced: reduced.matches }));
+  previewWriters = writers;
+  await Promise.all(writers.map((w) => w.ready.catch(() => {})));
+  if (previewWriters !== writers) { writers.forEach((w) => w.destroy()); return; }
+  slots.forEach((slot, i) => {
+    const w = writers[i];
     slot.replaceChildren(w.element);
+    w.size(slot.clientWidth - 8, slot.clientHeight - 8);
     w.play();
-    previewWriters.push(w);
   });
 }
 
