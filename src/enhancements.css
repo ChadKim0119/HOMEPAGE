@@ -109,15 +109,12 @@ html[lang='en'] .brand-name { font-size: 46px; }
 .utility-button svg { width: 13px; height: 13px; }
 .utility-button kbd { font-size: 8px; }
 .utility-button:hover { opacity: 1; }
-.reference-gallery, .reference-replay { display: none; }
 body[data-dark='true'] .utility-controls { color: #eeeae0; }
 body[data-reference='true'] .site-header,
 body[data-reference='true'] .site-footer,
 body[data-reference='true'] .page-rail,
 body[data-reference='true'] .scroll-hint { visibility: hidden; pointer-events: none; }
 body[data-reference='true'] .page-rail { display: none; }
-body[data-reference='true'] .reference-gallery,
-body[data-reference='true'] .reference-replay { display: flex; }
 body[data-reference='true'] .utility-controls { opacity: .55; }
 body[data-reference='true'] .utility-controls:hover,
 body[data-reference='true'] .utility-controls:focus-within { opacity: 1; }
@@ -333,7 +330,6 @@ body[data-reference='true'] .utility-controls:focus-within { opacity: 1; }
 }
 
 /* Calligraphy comparison: candidates tried on the chosen homepage. */
-.site-header nav .nav-compare { display: flex; align-items: center; gap: 7px; }
 .compare-dialog { width: min(620px, 92vw); }
 .compare-dialog h2 { font-size: 22px !important; margin: 14px 0 10px; }
 .compare-drop {
@@ -393,7 +389,6 @@ body[data-dark='true'] .candidate-artwork.is-ink { filter: brightness(0) invert(
 body.is-comparing .toast { bottom: 150px; }
 @media (prefers-reduced-motion: reduce) { .candidate-artwork { animation: none; } }
 @media (max-width: 650px) {
-  .site-header nav .nav-compare { display: none; }
   body.is-comparing .compare-hud { bottom: 14px; }
   .compare-name { max-width: 34vw; }
   .compare-keys { display: none; }

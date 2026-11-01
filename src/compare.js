@@ -3,7 +3,7 @@
 const DB_NAME = 'yeobaek-compare';
 const STORE = 'candidates';
 const IMAGE_PATTERN = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i;
-export const MAX_CANDIDATES = 30;
+export const MAX_CANDIDATES = 50;
 
 function openDb() {
   return new Promise((resolve, reject) => {
