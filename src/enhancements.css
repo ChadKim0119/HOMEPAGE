@@ -332,76 +332,69 @@ body[data-reference='true'] .utility-controls:focus-within { opacity: 1; }
   .is-focus .layout-reference .art-composition { transform: none !important; }
 }
 
-/* Calligraphy comparison: visitor images, side by side. */
+/* Calligraphy comparison: candidates tried on the chosen homepage. */
 .site-header nav .nav-compare { display: flex; align-items: center; gap: 7px; }
+.compare-dialog { width: min(620px, 92vw); }
+.compare-dialog h2 { font-size: 22px !important; margin: 14px 0 10px; }
 .compare-drop {
-  margin-top: 26px; padding: 26px; border: 1px dashed #b9bcae; border-radius: 3px;
-  display: flex; align-items: center; gap: 22px; flex-wrap: wrap; transition: background .2s, border-color .2s;
+  margin-top: 22px; padding: 22px; border: 1px dashed #b9bcae; border-radius: 3px;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 14px; transition: background .2s, border-color .2s;
 }
 .compare-drop.is-dragging { background: #ecebe1; border-color: #36432f; }
 .compare-drop p { font-size: 11px; color: #7d8176; margin: 0; }
 .compare-pickers { display: flex; gap: 10px; flex-wrap: wrap; }
 .compare-pick {
   display: flex; align-items: center; gap: 9px; padding: 13px 18px; font-size: 12px;
-  background: #36432f; color: #fff; border-radius: 2px; transition: background .2s;
+  background: #36432f; color: #fff; border-radius: 2px; transition: background .2s, color .2s;
 }
 .compare-pick + .compare-pick { background: transparent; color: #36432f; border: 1px solid #36432f; }
 .compare-pick:hover { background: #4b5d40; color: #fff; }
 .compare-pick svg { width: 15px; height: 15px; }
-.compare-toolbar { flex-direction: row !important; align-items: center !important; }
-.compare-clear { font-size: 11px; color: #a14b3a; padding: 9px 4px; border-bottom: 1px solid #a14b3a55; }
-.compare-stage {
-  --columns: 2; display: grid; grid-template-columns: repeat(var(--columns), minmax(0, 1fr));
-  gap: 14px; padding: 14px; border-radius: 3px; min-height: 260px; transition: background .3s;
+.compare-resume .solid-button { margin-top: 18px; }
+.compare-clear { margin-top: 12px; font-size: 11px; color: #a14b3a; padding: 4px 0; border-bottom: 1px solid #a14b3a55; }
+
+.compare-hud { display: none; }
+body.is-comparing .compare-hud {
+  position: fixed; z-index: 30; left: 50%; bottom: 22px; transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 8px; width: max-content; max-width: 94vw;
 }
-.compare-stage.bg-paper { background: #f1ebdc; }
-.compare-stage.bg-white { background: #fff; box-shadow: inset 0 0 0 1px #e3e3da; }
-.compare-stage.bg-dark { background: #1d1f1b; color: #eeeae0; }
-.compare-stage .empty-state { grid-column: 1 / -1; min-height: 230px; }
-.compare-cell { margin: 0; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.compare-frame { height: min(46dvh, 460px); display: flex; align-items: center; justify-content: center; }
-.compare-frame img { max-width: 100%; max-height: 100%; object-fit: contain; }
-.compare-stage.bg-dark .compare-frame img { background: #f6f3ea; padding: 6px; }
-.compare-cell figcaption {
-  display: flex; align-items: center; gap: 9px; font-family: var(--mono); font-size: 10px;
-  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+body.is-comparing .scenes { overflow: hidden; }
+body.is-comparing .site-footer, body.is-comparing .scroll-hint, body.is-comparing .replay-button,
+body.is-comparing .reference-replay { visibility: hidden; }
+.compare-bar {
+  display: flex; align-items: center; gap: 4px; padding: 6px; border-radius: 40px;
+  background: #1f231dE6; color: #f3f0e7; box-shadow: 0 10px 40px #0000003d; backdrop-filter: blur(10px);
 }
-.compare-cell figcaption > span { opacity: .5; }
-.compare-cell figcaption button { margin-left: auto; display: flex; align-items: center; gap: 5px; font-size: 10px; color: inherit; flex-shrink: 0; }
-.compare-cell figcaption svg { width: 11px; height: 11px; }
-.compare-hint { font-size: 11px; color: #7d8176; margin: 26px 0 12px; }
-.compare-hint b { color: #36432f; font-weight: 400; margin-left: 6px; font-family: var(--mono); }
-.compare-thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
-.compare-thumb { min-width: 0; }
-.compare-toggle {
-  position: relative; display: flex; align-items: center; justify-content: center; width: 100%;
-  aspect-ratio: 4 / 3; background: #efece2; border: 2px solid transparent; border-radius: 3px; padding: 10px; transition: border-color .2s;
+.compare-bar button { display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 50%; color: inherit; transition: background .2s; }
+.compare-bar button:hover, .compare-bar button[aria-pressed='true'] { background: #ffffff22; }
+.compare-bar svg { width: 16px; height: 16px; }
+.compare-status { display: flex; align-items: baseline; gap: 10px; padding: 0 8px; font-family: var(--mono); font-size: 11px; min-width: 0; }
+.compare-count { font-weight: 400; letter-spacing: .5px; white-space: nowrap; }
+.compare-name { max-width: 26vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .7; }
+.compare-divider { width: 1px; height: 18px; background: #ffffff33; margin: 0 4px; }
+.compare-keys { margin: 0; font-family: var(--mono); font-size: 9px; letter-spacing: .4px; color: #5d6254; background: #f8f7f3cc; padding: 3px 9px; border-radius: 9px; }
+.compare-tray {
+  display: flex; gap: 6px; max-width: min(900px, 94vw); overflow-x: auto; padding: 7px; border-radius: 8px;
+  background: #f8f7f3f2; box-shadow: 0 10px 40px #0000002a; scrollbar-width: thin;
 }
-.compare-toggle img { max-width: 100%; max-height: 100%; object-fit: contain; }
-.compare-thumb.is-selected .compare-toggle { border-color: #36432f; }
-.compare-check {
-  position: absolute; top: 7px; right: 7px; width: 21px; height: 21px; border-radius: 50%;
-  border: 1px solid #36432f88; background: #fff; font-family: var(--mono); font-size: 10px;
-  display: flex; align-items: center; justify-content: center;
+.compare-tray[hidden] { display: none; }
+.compare-thumb {
+  position: relative; flex: 0 0 auto; width: 64px; height: 48px; padding: 3px; border-radius: 3px;
+  background: #fff; border: 2px solid transparent; display: flex; align-items: center; justify-content: center;
 }
-.compare-thumb.is-selected .compare-check { background: #36432f; color: #fff; border-color: #36432f; }
-.compare-thumb-info { display: flex; align-items: center; gap: 6px; margin-top: 7px; font-size: 10px; color: #5f6457; }
-.compare-thumb-info span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: var(--mono); }
-.compare-thumb-info button { margin-left: auto; flex-shrink: 0; opacity: .6; display: flex; }
-.compare-thumb-info button:hover { opacity: 1; color: #a14b3a; }
-.compare-thumb-info svg { width: 13px; height: 13px; }
+.compare-thumb img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.compare-thumb span { position: absolute; left: 2px; bottom: 1px; font-family: var(--mono); font-size: 8px; color: #6d7263; }
+.compare-thumb.is-current { border-color: #36432f; }
+.candidate-artwork { animation: candidate-in .35s ease-out; }
+@keyframes candidate-in { from { opacity: 0; } to { opacity: 1; } }
+/* On dark pages the lifted ink is shown light, the way it would be printed. */
+body[data-dark='true'] .candidate-artwork.is-ink { filter: brightness(0) invert(.93); }
+.compare-dialog.is-busy .compare-drop { opacity: .5; pointer-events: none; }
+body.is-comparing .toast { bottom: 150px; }
+@media (prefers-reduced-motion: reduce) { .candidate-artwork { animation: none; } }
 @media (max-width: 650px) {
-  .compare-drop { padding: 18px; }
-  .compare-stage { grid-template-columns: repeat(min(var(--columns), 2), minmax(0, 1fr)); }
-  .compare-frame { height: 30dvh; }
   .site-header nav .nav-compare { display: none; }
-}
-/* Scanned paper blends into light backgrounds so only the ink is compared. */
-.custom-artwork, .compare-stage:not(.bg-dark) img, .compare-toggle img { mix-blend-mode: multiply; }
-body[data-dark='true'] .custom-artwork { mix-blend-mode: normal; }
-.compare-cell figcaption .compare-name { overflow: hidden; text-overflow: ellipsis; }
-@media (max-width: 650px) {
-  .compare-cell figcaption { flex-wrap: wrap; white-space: normal; row-gap: 4px; }
-  .compare-cell figcaption .compare-name { white-space: nowrap; flex: 1 1 60%; }
-  .compare-cell figcaption button { margin-left: 0; }
+  body.is-comparing .compare-hud { bottom: 14px; }
+  .compare-name { max-width: 34vw; }
+  .compare-keys { display: none; }
 }

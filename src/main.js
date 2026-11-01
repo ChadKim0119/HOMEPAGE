@@ -10,7 +10,7 @@ import './enhancements.css';
 import { scenes, localizeScene } from './scenes.js';
 import { copy } from './i18n.js';
 import { SceneMotion } from './motion.js';
-import { loadUploads, addUploads, removeUpload, clearUploads, toScene, isImageFile } from './compare.js';
+import { loadCandidates, replaceCandidates, clearCandidates, isImageFile } from './compare.js';
 const artworkModules = import.meta.glob('./generated/*.json');
 const brushArt = {};
 async function loadBrushArt(locale) {
@@ -29,6 +29,8 @@ const paths = {
   grid: '<rect x="3" y="3" width="6" height="6"/><rect x="15" y="3" width="6" height="6"/><rect x="3" y="15" width="6" height="6"/><rect x="15" y="15" width="6" height="6"/>',
   bookmark: '<path d="M6 3h12v18l-6-4-6 4z"/>', close: '<path d="m6 6 12 12M6 18 18 6"/>',
   compare: '<rect x="3" y="4" width="7.5" height="16"/><rect x="13.5" y="4" width="7.5" height="16"/>', upload: '<path d="M12 16V4m-5 5 5-5 5 5M4 20h16"/>', folder: '<path d="M3 6h6l2 2h10v11H3z"/>',
+  paper: '<path d="M5 3h10l4 4v14H5z"/><path d="M9 12h6M9 16h4"/>',
+  left: '<path d="m15 5-7 7 7 7"/>', right: '<path d="m9 5 7 7-7 7"/>',
   focus: '<path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/>', replay: '<path d="M3 10a9 9 0 1 1 2 8M3 4v6h6"/>',
 };
 const icon = (name) => `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name]}</svg>`;
@@ -36,11 +38,6 @@ const pad = (number) => String(number).padStart(2, '0');
 const esc = (value) => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const readStorage = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } };
 let language = readStorage('yeobaek-language', 'en') === 'ko' ? 'ko' : 'en';
-const uploadCount = () => scenes.filter((scene) => scene.upload).length;
-scenes.push(...(await loadUploads()).map((record, index) => toScene(record, index)));
-const MAX_COMPARE = 4;
-let compareSelection = scenes.filter((scene) => scene.upload).slice(0, 2).map((scene) => scene.id);
-let compareBackground = 'paper';
 const validIds = new Set(scenes.map((scene) => scene.id));
 const oldSaved = readStorage('yeobaek-saved', []);
 const storedSaved = readStorage('yeobaek-saved-v2', null);
@@ -56,6 +53,11 @@ let toastTimer;
 let contactPreview = false;
 let signupPreview = false;
 const contactDraft = { name: '', email: '', message: '', signup: '' };
+let candidates = await loadCandidates();
+let candidateIndex = 0;
+let comparing = false;
+let thumbsOpen = false;
+let showOriginal = false;
 const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
 const motion = new SceneMotion(reduced);
 const text = () => copy[language];
@@ -113,12 +115,12 @@ function render() {
       const scene = sceneAt(i);
       return `<section class="scene theme-${scene.theme} layout-${scene.layout} effect-${scene.effect}" id="scene-${pad(i+1)}" data-index="${i}" data-effect="${scene.effect}" aria-labelledby="title-${i}" ${scene.reference ? 'data-reference="true"' : ''}><div class="scene-background" aria-hidden="true"><div class="ambient-layer"></div>${scene.effect === 'ink' ? '<canvas class="ink-canvas"></canvas>' : ''}</div>${scene.reference ? referenceChrome() : `<div class="scene-eyebrow guide"><span class="eyebrow-rule"></span>${pad(i+1)} — ${esc(scene.title.toUpperCase())}</div><div class="side-caption guide" aria-hidden="true">${t.sideCaption}</div>`}<div class="artwork">${art(scene)}</div>${scene.reference ? `<h1 class="sr-only" id="title-${i}">${esc(scene.title)}</h1>` : `<div class="scene-description guide"><div class="scene-title-row"><span class="scene-number">${pad(i+1)}<span> / ${scenes.length}</span></span><h1 id="title-${i}">${esc(scene.title)}</h1></div><p>${esc(scene.note)}</p><div class="mood-tags">${esc(scene.mood)}</div></div><div class="art-note guide"><span class="effect-hint">${reduced.matches ? t.motionOff : t.hints[scene.effect]}</span><button class="replay-button" data-action="replay" ${reduced.matches ? 'disabled' : ''}>${icon('replay')}${t.replay}</button></div>`}</section>`;
     }).join('')}</main>
-    <div class="utility-controls guide"><div class="language-switch" role="group" aria-label="${t.language}"><button data-language="en" lang="en" aria-label="${t.english}" aria-pressed="${language === 'en'}">EN</button><span>/</span><button data-language="ko" lang="ko" aria-label="${t.korean}" aria-pressed="${language === 'ko'}">KO</button></div><span class="utility-divider"></span><button data-action="focus" class="utility-button" aria-label="${t.focus}" title="${t.focus}">${icon('focus')}<kbd>F</kbd></button><button data-action="compare" class="utility-button reference-compare" aria-label="${t.compare}" title="${t.compare}">${icon('compare')}</button><button data-action="gallery" class="utility-button reference-gallery" aria-label="${t.collection}" title="${t.collection}">${icon('grid')}</button><button data-action="replay" class="utility-button reference-replay" aria-label="${t.replay}" title="${reduced.matches ? t.motionOff : t.replay}" ${reduced.matches ? 'disabled' : ''}>${icon('replay')}</button></div>
+    <div class="utility-controls guide"><div class="language-switch" role="group" aria-label="${t.language}"><button data-language="en" lang="en" aria-label="${t.english}" aria-pressed="${language === 'en'}">EN</button><span>/</span><button data-language="ko" lang="ko" aria-label="${t.korean}" aria-pressed="${language === 'ko'}">KO</button></div><span class="utility-divider"></span><button data-action="focus" class="utility-button" aria-label="${t.focus}" title="${t.focus}">${icon('focus')}<kbd>F</kbd></button><button data-action="compare" class="utility-button compare-button" aria-label="${t.compare}" title="${t.compare}">${icon('compare')}</button><button data-action="gallery" class="utility-button reference-gallery" aria-label="${t.collection}" title="${t.collection}">${icon('grid')}</button><button data-action="replay" class="utility-button reference-replay" aria-label="${t.replay}" title="${reduced.matches ? t.motionOff : t.replay}" ${reduced.matches ? 'disabled' : ''}>${icon('replay')}</button></div>
     <aside class="page-rail guide" aria-label="${t.chooseScene}"><span class="rail-start">01</span><div class="rail-dots">${scenes.map((_, i) => `<button class="rail-dot" data-page="${i}" aria-label="${pad(i+1)}. ${esc(sceneAt(i).title)}"><span>${pad(i+1)} ${esc(sceneAt(i).title)}</span></button>`).join('')}</div><span class="rail-end">${scenes.length}</span></aside>
     <footer class="site-footer guide"><div class="footer-edition"><span class="edition-dot"></span><span>${language === 'en' ? 'YEOBAEK STUDIO' : '여백 스튜디오'}</span><span class="edition-divider">/</span><span>${t.edition}</span></div><div class="footer-controls"><button class="save-button" data-action="save" aria-pressed="false">${icon('bookmark')}<span>${t.save}</span></button><span class="control-divider"></span><span class="footer-count"><b id="current-number">${pad(active+1)}</b><span>/ ${scenes.length}</span></span><button class="arrow-button" data-action="previous" aria-label="${t.previous}">${icon('up')}</button><button class="arrow-button" data-action="next" aria-label="${t.next}">${icon('down')}</button></div></footer>
     <div class="scroll-hint guide" aria-hidden="true"><span>${t.scroll}</span><div class="scroll-line"></div></div>
     <button class="focus-exit" data-action="focus" aria-label="${t.exitFocus}" title="${t.exitFocus}">${icon('close')}</button>
-    ${galleryMarkup()}${compareMarkup()}${infoMarkup()}<div class="toast" role="status" aria-live="polite"></div>`;
+    ${galleryMarkup()}${compareMarkup()}${infoMarkup()}${compareHudMarkup()}<div class="toast" role="status" aria-live="polite"></div>`;
   restoreDraft();
   const root = getMain();
   root.scrollTop = sections()[active].offsetTop;
@@ -127,6 +129,7 @@ function render() {
   }), { root, threshold: .62 });
   sections().forEach((section) => observer.observe(section));
   setActive(active, true);
+  if (comparing) applyCandidate();
   root.addEventListener('pointermove', (event) => { if (!event.target.closest('button,input,textarea,a')) motion.move(event); });
   root.addEventListener('pointerdown', (event) => { if (!event.target.closest('button,input,textarea,a,form')) motion.tap(event); });
   updateClock();
@@ -139,63 +142,79 @@ function galleryMarkup() {
 
 function compareMarkup() {
   const t = text();
-  return `<dialog class="gallery-dialog compare-dialog" id="compare-dialog" aria-labelledby="compare-heading"><div class="gallery-header"><div><span class="overline">${t.compareOverline}</span><h2 id="compare-heading">${t.compareHeading}<span>.</span></h2><p>${t.compareDescription}</p></div><button class="close-button" data-close aria-label="${t.close}">${icon('close')}</button></div><div class="compare-drop" data-drop><div class="compare-pickers"><button class="compare-pick" data-action="compare-files">${icon('upload')}${t.chooseFiles}</button><button class="compare-pick" data-action="compare-folder">${icon('folder')}${t.chooseFolder}</button></div><p>${t.dropHint}</p><input type="file" id="compare-files" accept="image/*" multiple hidden><input type="file" id="compare-folder" webkitdirectory directory multiple hidden></div><div class="gallery-toolbar compare-toolbar"><div class="filters" role="group" aria-label="${t.compareBackground}">${t.backgrounds.map(([id, label]) => `<button data-compare-bg="${id}" aria-pressed="${id === compareBackground}" class="filter-button${id === compareBackground ? ' selected' : ''}">${label}</button>`).join('')}</div><button class="compare-clear" data-action="compare-clear">${t.clearUploads}</button></div><div class="compare-stage"></div><div class="compare-list"></div></dialog>`;
+  return `<dialog class="info-dialog compare-dialog" id="compare-dialog" aria-labelledby="compare-heading"><button class="close-button" data-close aria-label="${t.close}">${icon('close')}</button><span class="overline">${t.compareOverline}</span><h2 id="compare-heading"></h2><p>${t.compareDescription}</p><div class="compare-drop" data-drop><div class="compare-pickers"><button class="compare-pick" data-action="compare-files">${icon('upload')}${t.chooseFiles}</button><button class="compare-pick" data-action="compare-folder">${icon('folder')}${t.chooseFolder}</button></div><p>${t.dropHint}</p><input type="file" id="compare-files" accept="image/*" multiple hidden><input type="file" id="compare-folder" webkitdirectory directory multiple hidden></div><p class="demo-note">${t.limitNote}</p><div class="compare-resume"></div></dialog>`;
 }
 
-function renderCompare() {
+function renderCompareDialog() {
   const t = text();
-  const uploads = scenes.map((scene, index) => ({ scene, index })).filter(({ scene }) => scene.upload);
-  compareSelection = compareSelection.filter((id) => uploads.some(({ scene }) => scene.id === id));
-  const dialog = document.querySelector('#compare-dialog');
-  dialog.querySelector('.compare-clear').hidden = !uploads.length;
-  dialog.querySelector('.compare-toolbar .filters').hidden = !uploads.length;
-  const stage = dialog.querySelector('.compare-stage');
-  const picked = compareSelection.map((id) => uploads.find(({ scene }) => scene.id === id));
-  stage.className = `compare-stage bg-${compareBackground}`;
-  stage.style.setProperty('--columns', Math.max(1, picked.length));
-  stage.innerHTML = !uploads.length
-    ? `<div class="empty-state">${icon('compare')}<h3>${t.compareEmpty}</h3><p>${t.compareEmptyNote}</p></div>`
-    : picked.length
-      ? picked.map(({ scene, index }) => `<figure class="compare-cell"><div class="compare-frame"><img src="${esc(scene.artwork)}" alt="${esc(scene.fileName)}"></div><figcaption><span>${pad(index + 1)}</span><span class="compare-name">${esc(scene.fileName)}</span><button data-page="${index}">${t.viewInPage}${icon('diagonal')}</button></figcaption></figure>`).join('')
-      : `<div class="empty-state"><p>${t.compareSelectHint}</p></div>`;
-  dialog.querySelector('.compare-list').innerHTML = uploads.length ? `<p class="compare-hint">${t.compareSelectHint} <b>${picked.length} / ${MAX_COMPARE}</b></p><div class="compare-thumbs">${uploads.map(({ scene, index }) => {
-    const on = compareSelection.includes(scene.id);
-    return `<article class="compare-thumb${on ? ' is-selected' : ''}"><button class="compare-toggle" data-compare-toggle="${esc(scene.id)}" aria-pressed="${on}" aria-label="${esc(scene.fileName)} — ${on ? t.compareDeselect : t.compareSelect}"><img src="${esc(scene.artwork)}" alt=""><span class="compare-check" aria-hidden="true">${on ? compareSelection.indexOf(scene.id) + 1 : ''}</span></button><div class="compare-thumb-info"><span title="${esc(scene.fileName)}">${pad(index + 1)} · ${esc(scene.fileName)}</span><button data-compare-remove="${esc(scene.id)}" aria-label="${esc(scene.fileName)} — ${t.removeUpload}">${icon('close')}</button></div></article>`;
-  }).join('')}</div>` : '';
+  document.querySelector('#compare-heading').textContent = `${pad(active + 1)}. ${sceneAt(active).title}`;
+  document.querySelector('.compare-resume').innerHTML = candidates.length
+    ? `<button class="solid-button" data-action="compare-start">${t.resumeCompare(candidates.length)}${icon('arrow')}</button><button class="compare-clear" data-action="compare-clear">${t.clearCandidates}</button>`
+    : '';
 }
 
-async function handleUploadFiles(files) {
+function compareHudMarkup() {
+  const t = text();
+  return `<div class="compare-hud guide" role="region" aria-label="${t.hudLabel}"><div class="compare-tray" ${thumbsOpen ? '' : 'hidden'}>${candidates.map((candidate, i) => `<button class="compare-thumb" data-candidate="${i}" aria-label="${pad(i + 1)}. ${esc(candidate.name)}"><img src="${esc(candidate.url)}" alt=""><span>${pad(i + 1)}</span></button>`).join('')}</div><div class="compare-bar"><button class="compare-step" data-action="candidate-prev" aria-label="${t.prevCandidate}">${icon('left')}</button><div class="compare-status" aria-live="polite"><b class="compare-count"></b><span class="compare-name"></span></div><button class="compare-step" data-action="candidate-next" aria-label="${t.nextCandidate}">${icon('right')}</button><span class="compare-divider"></span><button class="compare-tool" data-action="compare-thumbs" aria-pressed="${thumbsOpen}" aria-label="${t.showThumbs}" title="${t.showThumbs}">${icon('grid')}</button><button class="compare-tool" data-action="compare-original" aria-pressed="${showOriginal}" aria-label="${t.showOriginal}" title="${t.showOriginal}">${icon('paper')}</button><button class="compare-tool" data-action="compare" aria-label="${t.loadAgain}" title="${t.loadAgain}">${icon('upload')}</button><button class="compare-tool" data-action="compare-exit" aria-label="${t.exitCompare}" title="${t.exitCompare}">${icon('close')}</button></div><p class="compare-keys">${t.compareKeys}</p></div>`;
+}
+
+// Swaps the active scene's calligraphy for the current candidate, keeping the
+// scene's background, layout, chrome and pointer effects untouched.
+function applyCandidate() {
+  if (!comparing || !candidates.length) return;
+  const candidate = candidates[candidateIndex];
+  const holder = sections()[active].querySelector('.artwork');
+  holder.innerHTML = art({ ...sceneAt(active), artwork: showOriginal ? candidate.url : candidate.inkUrl, lines: [candidate.name] });
+  holder.querySelector('.custom-artwork')?.classList.add('candidate-artwork', showOriginal ? 'is-original' : 'is-ink');
+  document.querySelector('.compare-count').textContent = `${pad(candidateIndex + 1)} / ${pad(candidates.length)}`;
+  document.querySelector('.compare-name').textContent = candidate.name;
+  document.querySelectorAll('.compare-thumb').forEach((thumb, i) => {
+    thumb.classList.toggle('is-current', i === candidateIndex);
+    if (i === candidateIndex) { thumb.setAttribute('aria-current', 'true'); if (thumbsOpen) thumb.scrollIntoView({ block: 'nearest', inline: 'center' }); }
+    else thumb.removeAttribute('aria-current');
+  });
+}
+
+function restoreArtwork(index) {
+  sections()[index].querySelector('.artwork').innerHTML = art(sceneAt(index));
+}
+
+function startCompare() {
+  if (!candidates.length) { openDialog('compare-dialog'); return; }
+  document.querySelector('dialog[open]')?.close();
+  comparing = true;
+  candidateIndex = Math.min(candidateIndex, candidates.length - 1);
+  document.body.classList.add('is-comparing');
+  applyCandidate();
+}
+
+function stopCompare() {
+  if (!comparing) return;
+  comparing = false;
+  document.body.classList.remove('is-comparing');
+  restoreArtwork(active);
+  motion.activate(sections()[active]);
+}
+
+function stepCandidate(delta, absolute) {
+  candidateIndex = absolute ?? (candidateIndex + delta + candidates.length) % candidates.length;
+  applyCandidate();
+}
+
+async function handleCandidateFiles(files) {
   const t = text();
   const list = [...files];
   if (!list.some(isImageFile)) { toast(t.noImages); return; }
-  let result;
-  try { result = await addUploads(list); }
-  catch { toast(t.uploadFailed); return; }
-  const start = uploadCount();
-  const added = result.records.map((record, i) => toScene(record, start + i));
-  scenes.push(...added);
-  compareSelection = [...compareSelection, ...added.map((scene) => scene.id)].slice(-MAX_COMPARE);
+  document.querySelector('#compare-dialog')?.classList.add('is-busy');
+  toast(t.preparing);
+  const result = await replaceCandidates(list);
+  candidates.forEach((candidate) => URL.revokeObjectURL(candidate.url));
+  candidates = result.candidates;
+  candidateIndex = 0;
   captureDraft();
   render();
-  openDialog('compare-dialog');
-  toast(`${t.uploadsAdded(added.length)}${result.skipped ? ` ${t.uploadsSkipped(result.skipped)}` : ''}`);
-}
-
-async function deleteUploads(ids) {
-  for (const id of ids) {
-    const index = scenes.findIndex((scene) => scene.id === id);
-    if (index < 0) continue;
-    try { await removeUpload(scenes[index].uploadId); } catch { /* Still removed for this visit. */ }
-    URL.revokeObjectURL(scenes[index].artwork);
-    scenes.splice(index, 1);
-    saved.delete(id);
-  }
-  try { localStorage.setItem('yeobaek-saved-v2', JSON.stringify([...saved])); } catch { /* In-memory state still applies. */ }
-  active = Math.min(active, scenes.length - 1);
-  captureDraft();
-  render();
-  openDialog('compare-dialog');
-  toast(text().uploadRemoved);
+  startCompare();
+  toast([t.candidatesLoaded(candidates.length), result.overflow && t.candidatesOverflow(result.overflow), result.skipped && t.uploadsSkipped(result.skipped), !result.stored && t.candidatesNotKept].filter(Boolean).join(' '));
 }
 
 // Folders dropped onto the dialog are walked recursively, like the folder picker.
@@ -232,6 +251,7 @@ function updateSaved() {
 
 function setActive(index, force = false) {
   if (active === index && !force) return;
+  if (comparing && active !== index) restoreArtwork(active);
   active = index;
   const scene = scenes[index];
   document.body.dataset.dark = scene.category === 'dark' || scene.theme === 'forest';
@@ -247,6 +267,7 @@ function setActive(index, force = false) {
   history.replaceState(null, '', `#scene-${pad(index + 1)}`);
   updateSaved();
   motion.activate(sections()[index]);
+  if (comparing) applyCandidate();
 }
 
 function goTo(index, instant = false) {
@@ -257,13 +278,13 @@ function goTo(index, instant = false) {
 function openDialog(id) {
   document.querySelectorAll('dialog[open]').forEach((dialog) => dialog.close());
   if (id === 'gallery-dialog') renderGallery();
-  if (id === 'compare-dialog') renderCompare();
+  if (id === 'compare-dialog') renderCompareDialog();
   document.getElementById(id).showModal();
 }
 
 function renderGallery() {
   const t = text();
-  const filtered = scenes.map((_, index) => ({ scene: sceneAt(index), index })).filter(({ scene }) => (filter === 'all' || (filter === 'upload' ? scene.upload : scene.category === filter)) && (!savedOnly || saved.has(scene.id)));
+  const filtered = scenes.map((_, index) => ({ scene: sceneAt(index), index })).filter(({ scene }) => (filter === 'all' || scene.category === filter) && (!savedOnly || saved.has(scene.id)));
   document.querySelector('.gallery-grid').innerHTML = filtered.length ? filtered.map(({ scene, index }) => `<article class="gallery-card"><button class="thumbnail theme-${scene.theme} layout-${scene.layout}" data-page="${index}" aria-label="${pad(index+1)}. ${esc(scene.title)} — ${t.openScene}">${art(scene, true)}<span class="thumbnail-open">${t.openScene}${icon('diagonal')}</span></button><div class="card-info"><button data-page="${index}"><span>${pad(index+1)}</span><h3>${esc(scene.title)}</h3></button><button class="card-save${saved.has(scene.id) ? ' is-saved' : ''}" data-save="${index}" aria-label="${esc(scene.title)} — ${saved.has(scene.id) ? t.unsave : t.saveScene}" aria-pressed="${saved.has(scene.id)}">${icon('bookmark')}</button></div><p>${esc(scene.mood)}</p></article>`).join('') : `<div class="empty-state">${icon('bookmark')}<h3>${t.empty}</h3><p>${savedOnly ? t.emptySaved : t.emptyFilter}</p><button class="filter-reset">${t.reset}${icon('arrow')}</button></div>`;
 }
 
@@ -355,19 +376,7 @@ document.addEventListener('click', (event) => {
       document.querySelectorAll('[data-filter]').forEach((el) => { el.classList.toggle('selected', el.dataset.filter === filter); el.setAttribute('aria-pressed', String(el.dataset.filter === filter)); });
       renderGallery(); return;
     }
-    if (button.dataset.compareToggle) {
-      const id = button.dataset.compareToggle;
-      if (compareSelection.includes(id)) compareSelection = compareSelection.filter((item) => item !== id);
-      else if (compareSelection.length >= MAX_COMPARE) toast(text().compareLimit);
-      else compareSelection.push(id);
-      renderCompare(); return;
-    }
-    if (button.dataset.compareRemove) { deleteUploads([button.dataset.compareRemove]); return; }
-    if (button.dataset.compareBg) {
-      compareBackground = button.dataset.compareBg;
-      document.querySelectorAll('[data-compare-bg]').forEach((el) => { el.classList.toggle('selected', el.dataset.compareBg === compareBackground); el.setAttribute('aria-pressed', String(el.dataset.compareBg === compareBackground)); });
-      renderCompare(); return;
-    }
+    if (button.dataset.candidate !== undefined) { stepCandidate(0, Number(button.dataset.candidate)); return; }
     if (button.classList.contains('saved-filter')) { savedOnly = !savedOnly; button.setAttribute('aria-pressed', String(savedOnly)); renderGallery(); return; }
     if (button.classList.contains('filter-reset')) {
       savedOnly = false; filter = 'all';
@@ -383,7 +392,25 @@ document.addEventListener('click', (event) => {
       case 'compare': openDialog('compare-dialog'); break;
       case 'compare-files': document.querySelector('#compare-files').click(); break;
       case 'compare-folder': document.querySelector('#compare-folder').click(); break;
-      case 'compare-clear': if (confirm(text().clearConfirm)) { clearUploads().catch(() => {}); deleteUploads(scenes.filter((scene) => scene.upload).map((scene) => scene.id)); } break;
+      case 'compare-start': startCompare(); break;
+      case 'compare-exit': stopCompare(); break;
+      case 'compare-original':
+        showOriginal = !showOriginal;
+        button.setAttribute('aria-pressed', String(showOriginal));
+        toast(showOriginal ? text().originalOn : text().originalOff);
+        applyCandidate(); break;
+      case 'candidate-prev': stepCandidate(-1); break;
+      case 'candidate-next': stepCandidate(1); break;
+      case 'compare-thumbs':
+        thumbsOpen = !thumbsOpen;
+        button.setAttribute('aria-pressed', String(thumbsOpen));
+        document.querySelector('.compare-tray').hidden = !thumbsOpen;
+        applyCandidate(); break;
+      case 'compare-clear':
+        stopCompare(); clearCandidates();
+        candidates.forEach((candidate) => URL.revokeObjectURL(candidate.url));
+        candidates = []; candidateIndex = 0;
+        captureDraft(); render(); openDialog('compare-dialog'); toast(text().candidatesCleared); break;
       case 'save': toggleSave(active); break;
       case 'previous': goTo(active - 1); break;
       case 'next': goTo((active + 1) % scenes.length); break;
@@ -401,22 +428,31 @@ document.addEventListener('change', (event) => {
   if (!['compare-files', 'compare-folder'].includes(event.target.id)) return;
   const files = [...event.target.files];
   event.target.value = '';
-  if (files.length) handleUploadFiles(files);
+  if (files.length) handleCandidateFiles(files);
 });
 document.addEventListener('dragover', (event) => {
-  const zone = event.target.closest?.('#compare-dialog');
-  if (!zone) return;
+  const dialog = event.target.closest?.('#compare-dialog');
+  if (!dialog) return;
   event.preventDefault();
-  zone.querySelector('[data-drop]').classList.add('is-dragging');
+  dialog.querySelector('[data-drop]').classList.add('is-dragging');
 });
 document.addEventListener('dragleave', (event) => {
-  if (event.target.closest?.('[data-drop]') && !event.relatedTarget?.closest?.('[data-drop]')) event.target.closest('[data-drop]').classList.remove('is-dragging');
+  if (!event.relatedTarget?.closest?.('#compare-dialog')) document.querySelector('[data-drop]')?.classList.remove('is-dragging');
 });
 document.addEventListener('drop', async (event) => {
   if (!event.target.closest?.('#compare-dialog')) return;
   event.preventDefault();
   document.querySelector('[data-drop]')?.classList.remove('is-dragging');
-  handleUploadFiles(await filesFromDrop(event.dataTransfer));
+  handleCandidateFiles(await filesFromDrop(event.dataTransfer));
+});
+// Horizontal swipes switch candidates on touch screens.
+let swipeStart;
+document.addEventListener('touchstart', (event) => { swipeStart = comparing ? event.touches[0] : null; }, { passive: true });
+document.addEventListener('touchend', (event) => {
+  if (!swipeStart || !comparing) return;
+  const dx = event.changedTouches[0].clientX - swipeStart.clientX;
+  const dy = event.changedTouches[0].clientY - swipeStart.clientY;
+  if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) stepCandidate(dx < 0 ? 1 : -1);
 });
 
 document.addEventListener('submit', (event) => {
@@ -437,6 +473,13 @@ document.addEventListener('keydown', (event) => {
   const editing = event.target.isContentEditable || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName);
   if (editing || event.metaKey || event.ctrlKey || event.altKey || event.repeat || document.querySelector('dialog[open]')) return;
   if (event.key.toLowerCase() === 'f') { event.preventDefault(); toggleFocus(); return; }
+  if (comparing) {
+    const steps = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 };
+    if (event.key in steps) { event.preventDefault(); stepCandidate(steps[event.key]); return; }
+    if (event.key === 'Home' || event.key === 'End') { event.preventDefault(); stepCandidate(0, event.key === 'Home' ? 0 : candidates.length - 1); return; }
+    if (event.key === 'PageUp' || event.key === 'PageDown') { event.preventDefault(); goTo(active + (event.key === 'PageDown' ? 1 : -1)); return; }
+    if (event.key === 'Escape') { if (focusMode && !document.fullscreenElement) applyFocus(false); else stopCompare(); return; }
+  }
   if (event.key === 'Escape' && focusMode && !document.fullscreenElement) { applyFocus(false); return; }
   if (['ArrowDown', 'PageDown', 'ArrowUp', 'PageUp', 'Home', 'End'].includes(event.key)) {
     event.preventDefault();
