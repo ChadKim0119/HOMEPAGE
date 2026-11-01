@@ -10,6 +10,7 @@ import './enhancements.css';
 import { scenes, localizeScene } from './scenes.js';
 import { copy } from './i18n.js';
 import { SceneMotion } from './motion.js';
+import { loadUploads, addUploads, removeUpload, clearUploads, toScene, isImageFile } from './compare.js';
 const artworkModules = import.meta.glob('./generated/*.json');
 const brushArt = {};
 async function loadBrushArt(locale) {
@@ -27,6 +28,7 @@ const paths = {
   up: '<path d="M12 20V4m-7 7 7-7 7 7"/>', diagonal: '<path d="M5 19 19 5M5 5h14v14"/>',
   grid: '<rect x="3" y="3" width="6" height="6"/><rect x="15" y="3" width="6" height="6"/><rect x="3" y="15" width="6" height="6"/><rect x="15" y="15" width="6" height="6"/>',
   bookmark: '<path d="M6 3h12v18l-6-4-6 4z"/>', close: '<path d="m6 6 12 12M6 18 18 6"/>',
+  compare: '<rect x="3" y="4" width="7.5" height="16"/><rect x="13.5" y="4" width="7.5" height="16"/>', upload: '<path d="M12 16V4m-5 5 5-5 5 5M4 20h16"/>', folder: '<path d="M3 6h6l2 2h10v11H3z"/>',
   focus: '<path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/>', replay: '<path d="M3 10a9 9 0 1 1 2 8M3 4v6h6"/>',
 };
 const icon = (name) => `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name]}</svg>`;
@@ -34,6 +36,11 @@ const pad = (number) => String(number).padStart(2, '0');
 const esc = (value) => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const readStorage = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } };
 let language = readStorage('yeobaek-language', 'en') === 'ko' ? 'ko' : 'en';
+const uploadCount = () => scenes.filter((scene) => scene.upload).length;
+scenes.push(...(await loadUploads()).map((record, index) => toScene(record, index)));
+const MAX_COMPARE = 4;
+let compareSelection = scenes.filter((scene) => scene.upload).slice(0, 2).map((scene) => scene.id);
+let compareBackground = 'paper';
 const validIds = new Set(scenes.map((scene) => scene.id));
 const oldSaved = readStorage('yeobaek-saved', []);
 const storedSaved = readStorage('yeobaek-saved-v2', null);
@@ -101,17 +108,17 @@ function render() {
   document.title = t.pageTitle;
   document.querySelector('meta[name="description"]').content = t.galleryDescription;
   document.querySelector('#app').innerHTML = `
-    <header class="site-header guide"><button class="brand" data-action="home" aria-label="${t.brandLabel}"><span class="brand-name">${t.brand}</span><span class="brand-description">${t.brandDescription}</span></button><nav aria-label="${t.navigation}"><button data-action="gallery">${icon('grid')}${t.collection}<span class="nav-count">${scenes.length}</span></button><button class="nav-about" data-action="about">${t.about}</button><button class="contact-link" data-action="contact">${t.contact}${icon('diagonal')}</button></nav></header>
+    <header class="site-header guide"><button class="brand" data-action="home" aria-label="${t.brandLabel}"><span class="brand-name">${t.brand}</span><span class="brand-description">${t.brandDescription}</span></button><nav aria-label="${t.navigation}"><button data-action="gallery">${icon('grid')}${t.collection}<span class="nav-count">${scenes.length}</span></button><button class="nav-compare" data-action="compare">${icon('compare')}${t.compare}</button><button class="nav-about" data-action="about">${t.about}</button><button class="contact-link" data-action="contact">${t.contact}${icon('diagonal')}</button></nav></header>
     <main class="scenes" id="scenes" aria-label="${t.scenes}">${scenes.map((_, i) => {
       const scene = sceneAt(i);
       return `<section class="scene theme-${scene.theme} layout-${scene.layout} effect-${scene.effect}" id="scene-${pad(i+1)}" data-index="${i}" data-effect="${scene.effect}" aria-labelledby="title-${i}" ${scene.reference ? 'data-reference="true"' : ''}><div class="scene-background" aria-hidden="true"><div class="ambient-layer"></div>${scene.effect === 'ink' ? '<canvas class="ink-canvas"></canvas>' : ''}</div>${scene.reference ? referenceChrome() : `<div class="scene-eyebrow guide"><span class="eyebrow-rule"></span>${pad(i+1)} — ${esc(scene.title.toUpperCase())}</div><div class="side-caption guide" aria-hidden="true">${t.sideCaption}</div>`}<div class="artwork">${art(scene)}</div>${scene.reference ? `<h1 class="sr-only" id="title-${i}">${esc(scene.title)}</h1>` : `<div class="scene-description guide"><div class="scene-title-row"><span class="scene-number">${pad(i+1)}<span> / ${scenes.length}</span></span><h1 id="title-${i}">${esc(scene.title)}</h1></div><p>${esc(scene.note)}</p><div class="mood-tags">${esc(scene.mood)}</div></div><div class="art-note guide"><span class="effect-hint">${reduced.matches ? t.motionOff : t.hints[scene.effect]}</span><button class="replay-button" data-action="replay" ${reduced.matches ? 'disabled' : ''}>${icon('replay')}${t.replay}</button></div>`}</section>`;
     }).join('')}</main>
-    <div class="utility-controls guide"><div class="language-switch" role="group" aria-label="${t.language}"><button data-language="en" lang="en" aria-label="${t.english}" aria-pressed="${language === 'en'}">EN</button><span>/</span><button data-language="ko" lang="ko" aria-label="${t.korean}" aria-pressed="${language === 'ko'}">KO</button></div><span class="utility-divider"></span><button data-action="focus" class="utility-button" aria-label="${t.focus}" title="${t.focus}">${icon('focus')}<kbd>F</kbd></button><button data-action="gallery" class="utility-button reference-gallery" aria-label="${t.collection}" title="${t.collection}">${icon('grid')}</button><button data-action="replay" class="utility-button reference-replay" aria-label="${t.replay}" title="${reduced.matches ? t.motionOff : t.replay}" ${reduced.matches ? 'disabled' : ''}>${icon('replay')}</button></div>
+    <div class="utility-controls guide"><div class="language-switch" role="group" aria-label="${t.language}"><button data-language="en" lang="en" aria-label="${t.english}" aria-pressed="${language === 'en'}">EN</button><span>/</span><button data-language="ko" lang="ko" aria-label="${t.korean}" aria-pressed="${language === 'ko'}">KO</button></div><span class="utility-divider"></span><button data-action="focus" class="utility-button" aria-label="${t.focus}" title="${t.focus}">${icon('focus')}<kbd>F</kbd></button><button data-action="compare" class="utility-button reference-compare" aria-label="${t.compare}" title="${t.compare}">${icon('compare')}</button><button data-action="gallery" class="utility-button reference-gallery" aria-label="${t.collection}" title="${t.collection}">${icon('grid')}</button><button data-action="replay" class="utility-button reference-replay" aria-label="${t.replay}" title="${reduced.matches ? t.motionOff : t.replay}" ${reduced.matches ? 'disabled' : ''}>${icon('replay')}</button></div>
     <aside class="page-rail guide" aria-label="${t.chooseScene}"><span class="rail-start">01</span><div class="rail-dots">${scenes.map((_, i) => `<button class="rail-dot" data-page="${i}" aria-label="${pad(i+1)}. ${esc(sceneAt(i).title)}"><span>${pad(i+1)} ${esc(sceneAt(i).title)}</span></button>`).join('')}</div><span class="rail-end">${scenes.length}</span></aside>
     <footer class="site-footer guide"><div class="footer-edition"><span class="edition-dot"></span><span>${language === 'en' ? 'YEOBAEK STUDIO' : '여백 스튜디오'}</span><span class="edition-divider">/</span><span>${t.edition}</span></div><div class="footer-controls"><button class="save-button" data-action="save" aria-pressed="false">${icon('bookmark')}<span>${t.save}</span></button><span class="control-divider"></span><span class="footer-count"><b id="current-number">${pad(active+1)}</b><span>/ ${scenes.length}</span></span><button class="arrow-button" data-action="previous" aria-label="${t.previous}">${icon('up')}</button><button class="arrow-button" data-action="next" aria-label="${t.next}">${icon('down')}</button></div></footer>
     <div class="scroll-hint guide" aria-hidden="true"><span>${t.scroll}</span><div class="scroll-line"></div></div>
     <button class="focus-exit" data-action="focus" aria-label="${t.exitFocus}" title="${t.exitFocus}">${icon('close')}</button>
-    ${galleryMarkup()}${infoMarkup()}<div class="toast" role="status" aria-live="polite"></div>`;
+    ${galleryMarkup()}${compareMarkup()}${infoMarkup()}<div class="toast" role="status" aria-live="polite"></div>`;
   restoreDraft();
   const root = getMain();
   root.scrollTop = sections()[active].offsetTop;
@@ -128,6 +135,85 @@ function render() {
 function galleryMarkup() {
   const t = text();
   return `<dialog class="gallery-dialog" id="gallery-dialog" aria-labelledby="gallery-heading"><div class="gallery-header"><div><span class="overline">${t.galleryOverline}</span><h2 id="gallery-heading">${t.galleryHeading}<span>.</span></h2><p>${t.galleryDescription}</p></div><button class="close-button" data-close aria-label="${t.close}">${icon('close')}</button></div><div class="gallery-toolbar"><div class="filters" role="group" aria-label="${t.filterLabel}">${t.filters.map(([id, label]) => `<button data-filter="${id}" aria-pressed="${id === filter}" class="filter-button${id === filter ? ' selected' : ''}">${label}</button>`).join('')}</div><button class="saved-filter" aria-pressed="${savedOnly}">${icon('bookmark')}<span>${t.savedScenes}</span><b>${saved.size}</b></button></div><div class="gallery-grid"></div><div class="gallery-bottom">${t.galleryFooter}<span>${t.galleryFooterNote}</span></div></dialog>`;
+}
+
+function compareMarkup() {
+  const t = text();
+  return `<dialog class="gallery-dialog compare-dialog" id="compare-dialog" aria-labelledby="compare-heading"><div class="gallery-header"><div><span class="overline">${t.compareOverline}</span><h2 id="compare-heading">${t.compareHeading}<span>.</span></h2><p>${t.compareDescription}</p></div><button class="close-button" data-close aria-label="${t.close}">${icon('close')}</button></div><div class="compare-drop" data-drop><div class="compare-pickers"><button class="compare-pick" data-action="compare-files">${icon('upload')}${t.chooseFiles}</button><button class="compare-pick" data-action="compare-folder">${icon('folder')}${t.chooseFolder}</button></div><p>${t.dropHint}</p><input type="file" id="compare-files" accept="image/*" multiple hidden><input type="file" id="compare-folder" webkitdirectory directory multiple hidden></div><div class="gallery-toolbar compare-toolbar"><div class="filters" role="group" aria-label="${t.compareBackground}">${t.backgrounds.map(([id, label]) => `<button data-compare-bg="${id}" aria-pressed="${id === compareBackground}" class="filter-button${id === compareBackground ? ' selected' : ''}">${label}</button>`).join('')}</div><button class="compare-clear" data-action="compare-clear">${t.clearUploads}</button></div><div class="compare-stage"></div><div class="compare-list"></div></dialog>`;
+}
+
+function renderCompare() {
+  const t = text();
+  const uploads = scenes.map((scene, index) => ({ scene, index })).filter(({ scene }) => scene.upload);
+  compareSelection = compareSelection.filter((id) => uploads.some(({ scene }) => scene.id === id));
+  const dialog = document.querySelector('#compare-dialog');
+  dialog.querySelector('.compare-clear').hidden = !uploads.length;
+  dialog.querySelector('.compare-toolbar .filters').hidden = !uploads.length;
+  const stage = dialog.querySelector('.compare-stage');
+  const picked = compareSelection.map((id) => uploads.find(({ scene }) => scene.id === id));
+  stage.className = `compare-stage bg-${compareBackground}`;
+  stage.style.setProperty('--columns', Math.max(1, picked.length));
+  stage.innerHTML = !uploads.length
+    ? `<div class="empty-state">${icon('compare')}<h3>${t.compareEmpty}</h3><p>${t.compareEmptyNote}</p></div>`
+    : picked.length
+      ? picked.map(({ scene, index }) => `<figure class="compare-cell"><div class="compare-frame"><img src="${esc(scene.artwork)}" alt="${esc(scene.fileName)}"></div><figcaption><span>${pad(index + 1)}</span><span class="compare-name">${esc(scene.fileName)}</span><button data-page="${index}">${t.viewInPage}${icon('diagonal')}</button></figcaption></figure>`).join('')
+      : `<div class="empty-state"><p>${t.compareSelectHint}</p></div>`;
+  dialog.querySelector('.compare-list').innerHTML = uploads.length ? `<p class="compare-hint">${t.compareSelectHint} <b>${picked.length} / ${MAX_COMPARE}</b></p><div class="compare-thumbs">${uploads.map(({ scene, index }) => {
+    const on = compareSelection.includes(scene.id);
+    return `<article class="compare-thumb${on ? ' is-selected' : ''}"><button class="compare-toggle" data-compare-toggle="${esc(scene.id)}" aria-pressed="${on}" aria-label="${esc(scene.fileName)} — ${on ? t.compareDeselect : t.compareSelect}"><img src="${esc(scene.artwork)}" alt=""><span class="compare-check" aria-hidden="true">${on ? compareSelection.indexOf(scene.id) + 1 : ''}</span></button><div class="compare-thumb-info"><span title="${esc(scene.fileName)}">${pad(index + 1)} · ${esc(scene.fileName)}</span><button data-compare-remove="${esc(scene.id)}" aria-label="${esc(scene.fileName)} — ${t.removeUpload}">${icon('close')}</button></div></article>`;
+  }).join('')}</div>` : '';
+}
+
+async function handleUploadFiles(files) {
+  const t = text();
+  const list = [...files];
+  if (!list.some(isImageFile)) { toast(t.noImages); return; }
+  let result;
+  try { result = await addUploads(list); }
+  catch { toast(t.uploadFailed); return; }
+  const start = uploadCount();
+  const added = result.records.map((record, i) => toScene(record, start + i));
+  scenes.push(...added);
+  compareSelection = [...compareSelection, ...added.map((scene) => scene.id)].slice(-MAX_COMPARE);
+  captureDraft();
+  render();
+  openDialog('compare-dialog');
+  toast(`${t.uploadsAdded(added.length)}${result.skipped ? ` ${t.uploadsSkipped(result.skipped)}` : ''}`);
+}
+
+async function deleteUploads(ids) {
+  for (const id of ids) {
+    const index = scenes.findIndex((scene) => scene.id === id);
+    if (index < 0) continue;
+    try { await removeUpload(scenes[index].uploadId); } catch { /* Still removed for this visit. */ }
+    URL.revokeObjectURL(scenes[index].artwork);
+    scenes.splice(index, 1);
+    saved.delete(id);
+  }
+  try { localStorage.setItem('yeobaek-saved-v2', JSON.stringify([...saved])); } catch { /* In-memory state still applies. */ }
+  active = Math.min(active, scenes.length - 1);
+  captureDraft();
+  render();
+  openDialog('compare-dialog');
+  toast(text().uploadRemoved);
+}
+
+// Folders dropped onto the dialog are walked recursively, like the folder picker.
+async function filesFromDrop(dataTransfer) {
+  const entries = [...dataTransfer.items].map((item) => item.webkitGetAsEntry?.()).filter(Boolean);
+  if (!entries.length) return [...dataTransfer.files];
+  const files = [];
+  const walk = async (entry) => {
+    if (entry.isFile) { files.push(await new Promise((resolve, reject) => entry.file(resolve, reject))); return; }
+    const reader = entry.createReader();
+    let batch;
+    do {
+      batch = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+      for (const child of batch) await walk(child);
+    } while (batch.length);
+  };
+  for (const entry of entries) await walk(entry);
+  return files;
 }
 
 function infoMarkup() {
@@ -171,12 +257,13 @@ function goTo(index, instant = false) {
 function openDialog(id) {
   document.querySelectorAll('dialog[open]').forEach((dialog) => dialog.close());
   if (id === 'gallery-dialog') renderGallery();
+  if (id === 'compare-dialog') renderCompare();
   document.getElementById(id).showModal();
 }
 
 function renderGallery() {
   const t = text();
-  const filtered = scenes.map((_, index) => ({ scene: sceneAt(index), index })).filter(({ scene }) => (filter === 'all' || scene.category === filter) && (!savedOnly || saved.has(scene.id)));
+  const filtered = scenes.map((_, index) => ({ scene: sceneAt(index), index })).filter(({ scene }) => (filter === 'all' || (filter === 'upload' ? scene.upload : scene.category === filter)) && (!savedOnly || saved.has(scene.id)));
   document.querySelector('.gallery-grid').innerHTML = filtered.length ? filtered.map(({ scene, index }) => `<article class="gallery-card"><button class="thumbnail theme-${scene.theme} layout-${scene.layout}" data-page="${index}" aria-label="${pad(index+1)}. ${esc(scene.title)} — ${t.openScene}">${art(scene, true)}<span class="thumbnail-open">${t.openScene}${icon('diagonal')}</span></button><div class="card-info"><button data-page="${index}"><span>${pad(index+1)}</span><h3>${esc(scene.title)}</h3></button><button class="card-save${saved.has(scene.id) ? ' is-saved' : ''}" data-save="${index}" aria-label="${esc(scene.title)} — ${saved.has(scene.id) ? t.unsave : t.saveScene}" aria-pressed="${saved.has(scene.id)}">${icon('bookmark')}</button></div><p>${esc(scene.mood)}</p></article>`).join('') : `<div class="empty-state">${icon('bookmark')}<h3>${t.empty}</h3><p>${savedOnly ? t.emptySaved : t.emptyFilter}</p><button class="filter-reset">${t.reset}${icon('arrow')}</button></div>`;
 }
 
@@ -268,6 +355,19 @@ document.addEventListener('click', (event) => {
       document.querySelectorAll('[data-filter]').forEach((el) => { el.classList.toggle('selected', el.dataset.filter === filter); el.setAttribute('aria-pressed', String(el.dataset.filter === filter)); });
       renderGallery(); return;
     }
+    if (button.dataset.compareToggle) {
+      const id = button.dataset.compareToggle;
+      if (compareSelection.includes(id)) compareSelection = compareSelection.filter((item) => item !== id);
+      else if (compareSelection.length >= MAX_COMPARE) toast(text().compareLimit);
+      else compareSelection.push(id);
+      renderCompare(); return;
+    }
+    if (button.dataset.compareRemove) { deleteUploads([button.dataset.compareRemove]); return; }
+    if (button.dataset.compareBg) {
+      compareBackground = button.dataset.compareBg;
+      document.querySelectorAll('[data-compare-bg]').forEach((el) => { el.classList.toggle('selected', el.dataset.compareBg === compareBackground); el.setAttribute('aria-pressed', String(el.dataset.compareBg === compareBackground)); });
+      renderCompare(); return;
+    }
     if (button.classList.contains('saved-filter')) { savedOnly = !savedOnly; button.setAttribute('aria-pressed', String(savedOnly)); renderGallery(); return; }
     if (button.classList.contains('filter-reset')) {
       savedOnly = false; filter = 'all';
@@ -280,6 +380,10 @@ document.addEventListener('click', (event) => {
       case 'gallery': openDialog('gallery-dialog'); break;
       case 'about': openDialog('about-dialog'); break;
       case 'contact': openDialog('contact-dialog'); break;
+      case 'compare': openDialog('compare-dialog'); break;
+      case 'compare-files': document.querySelector('#compare-files').click(); break;
+      case 'compare-folder': document.querySelector('#compare-folder').click(); break;
+      case 'compare-clear': if (confirm(text().clearConfirm)) { clearUploads().catch(() => {}); deleteUploads(scenes.filter((scene) => scene.upload).map((scene) => scene.id)); } break;
       case 'save': toggleSave(active); break;
       case 'previous': goTo(active - 1); break;
       case 'next': goTo((active + 1) % scenes.length); break;
@@ -291,6 +395,28 @@ document.addEventListener('click', (event) => {
     const rect = event.target.getBoundingClientRect();
     if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) event.target.close();
   }
+});
+
+document.addEventListener('change', (event) => {
+  if (!['compare-files', 'compare-folder'].includes(event.target.id)) return;
+  const files = [...event.target.files];
+  event.target.value = '';
+  if (files.length) handleUploadFiles(files);
+});
+document.addEventListener('dragover', (event) => {
+  const zone = event.target.closest?.('#compare-dialog');
+  if (!zone) return;
+  event.preventDefault();
+  zone.querySelector('[data-drop]').classList.add('is-dragging');
+});
+document.addEventListener('dragleave', (event) => {
+  if (event.target.closest?.('[data-drop]') && !event.relatedTarget?.closest?.('[data-drop]')) event.target.closest('[data-drop]').classList.remove('is-dragging');
+});
+document.addEventListener('drop', async (event) => {
+  if (!event.target.closest?.('#compare-dialog')) return;
+  event.preventDefault();
+  document.querySelector('[data-drop]')?.classList.remove('is-dragging');
+  handleUploadFiles(await filesFromDrop(event.dataTransfer));
 });
 
 document.addEventListener('submit', (event) => {
