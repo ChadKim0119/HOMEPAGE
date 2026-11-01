@@ -228,6 +228,10 @@ async function playWriting() {
   button?.classList.remove('is-loading');
   if (!comparing || candidates[candidateIndex] !== candidate) return;
   if (!analysis?.strokes.length) { toast(text().noStrokes); return; }
+  if (analysis.plan && !analysis.planAnnounced) {
+    analysis.planAnnounced = true;
+    toast(`${text().planApplied} ${analysis.plan.word}${analysis.plan.status === 'draft' ? ` (${text().planDraft})` : ''}`);
+  }
   const target = sections()[active].querySelector('.candidate-artwork');
   if (!target) return;
   if (target.tagName === 'IMG' && !target.complete) await target.decode().catch(() => {});

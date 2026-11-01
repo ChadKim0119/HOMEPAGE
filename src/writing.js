@@ -99,8 +99,9 @@ void main() {
   float a = 0.;
   if (uEffect == 0) {
     // Brush: a soft, fibrous front; wet ink is a little darker until it sets.
-    float j = (fbm(px / (uAvg * .5)) - .5) * 160.;
-    a = ink.a * smoothstep(0., 110., age + j);
+    // Low-frequency raggedness only at the front: a body of ink never dissolves in specks.
+    float j = (fbm(px / (uAvg * 1.2)) - .5) * 90.;
+    a = ink.a * smoothstep(0., 120., age + j);
     float wet = 1. - smoothstep(0., uSettle, age);
     c = uDark > .5 ? col : col * (1. - .3 * wet);
   } else if (uEffect == 1) {
@@ -108,7 +109,7 @@ void main() {
     a = ink.a * smoothstep(0., 26., age);
   } else if (uEffect == 2) {
     // Ink bleed: a wet bloom spreads ahead, then the line sharpens as the paper drinks it.
-    float j = (fbm(px / (uAvg * .4)) - .5) * 240.;
+    float j = (fbm(px / (uAvg * .9)) - .5) * 150.;
     float sharp = smoothstep(160., 340., age + j);
     float soft = textureLod(uInk, vUv, uBlurLod).a;
     float wet = smoothstep(0., 140., age + j) * (1. - smoothstep(0., uSettle, age - 220.));

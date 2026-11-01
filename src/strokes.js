@@ -1,3 +1,5 @@
+import { STROKE_PLANS } from './stroke-plans.js';
+
 // Recovers writing strokes from a calligraphy image so it can be "written"
 // again, the way a calligrapher would write it.
 //
@@ -251,14 +253,16 @@ function buildChains(edges, cluster, degree, dist, w) {
     if (e.loop || e.px.length < 2) return true;
     const a = e.px[0], b = e.px[e.px.length - 1];
     if (degree[a] <= 1 || degree[b] <= 1 || cluster[a] < 0 || cluster[b] < 0) return true;
-    if (e.px.length > Math.max(4, Math.max(radiusAt(a), radiusAt(b)) * 2.6)) return true;
+    // Only when the two junctions' ink discs overlap is it one crossing.
+    const [ax, ay] = point(a, w), [bx, by] = point(b, w);
+    if (Math.hypot(ax - bx, ay - by) > Math.max(4, (radiusAt(a) + radiusAt(b)) * .95)) return true;
     const ca = find(cluster[a]), cb = find(cluster[b]);
     if (ca !== cb) root.set(ca, cb);
     return false;
   });
   if (root.size) for (let i = 0; i < cluster.length; i++) if (cluster[i] >= 0) cluster[i] = find(cluster[i]);
   let list = edges.filter((e) => e.px.length > 0);
-  for (let round = 0; round < 2; round++) {
+  for (let round = 0; round < 3; round++) {
     const ends = new Map();
     list.forEach((e, idx) => {
       if (e.loop) return;
@@ -275,7 +279,14 @@ function buildChains(edges, cluster, degree, dist, w) {
       if (tipA === tipB) return true;
       const junction = tipA ? b : a;
       if ((ends.get(cluster[junction]) || []).length < 3) return true;
-      return e.px.length > Math.max(4, radiusAt(junction) * 1.6);
+      // A branch shorter than the brush is wide is the blot where the brush
+      // landed or lifted, not a stroke of its own.
+      // A spur ends inside the junction's own ink disc (the blot where the brush
+      // landed, turned or lifted); a real stroke reaches beyond it, however short
+      // and heavy it is.
+      const tip = tipA ? a : b;
+      const [tx, ty] = point(tip, w), [jx, jy] = point(junction, w);
+      return e.px.length > 4 && Math.hypot(tx - jx, ty - jy) + radiusAt(tip) > radiusAt(junction) * 1.6 + 1;
     });
   }
   const ends = new Map();
@@ -286,13 +297,24 @@ function buildChains(edges, cluster, degree, dist, w) {
       const c = cluster[node];
       if (degree[node] <= 1 || c < 0) return; // only real junctions join strokes
       if (!ends.has(c)) ends.set(c, []);
-      ends.get(c).push({ idx, side, dir: endDirection(e.px, side === 0, w, radiusAt(node) * 3) });
+      const other = side ? e.px[0] : e.px[e.px.length - 1];
+      const [ox, oy] = point(other, w), [nx, ny] = point(node, w);
+      const stub = degree[other] <= 1 && Math.hypot(ox - nx, oy - ny) + radiusAt(other) < radiusAt(node) * 2 + 1;
+      ends.get(c).push({ idx, side, stub, dir: endDirection(e.px, side === 0, w, radiusAt(node) * 3) });
     });
   });
   const link = new Map();
   const key = (idx, side) => idx * 2 + side;
   for (const group of ends.values()) {
     const pairs = [];
+    // With the blots set aside, two branches left at a junction are one line
+    // (宀's hook continuing the long sweep).
+    const real = group.filter((g) => !g.stub);
+    if (real.length === 2 && group.length > 2 && real[0].idx !== real[1].idx) {
+      const ka = key(real[0].idx, real[0].side), kb = key(real[1].idx, real[1].side);
+      if (!link.has(ka) && !link.has(kb)) { link.set(ka, kb); link.set(kb, ka); }
+      continue;
+    }
     for (let a = 0; a < group.length; a++) for (let b = a + 1; b < group.length; b++) {
       if (group[a].idx === group[b].idx) continue;
       const dot = group[a].dir[0] * group[b].dir[0] + group[a].dir[1] * group[b].dir[1];
@@ -525,6 +547,16 @@ function crosses(A, B, tol) {
 
 // -1: A is written before B, 1: B before A.
 function precedence(A, B, tol) {
+  if (A.samples.length && B.samples.length) {
+    const isDot = (S) => S.length < S.radius * 2 * 2.2;
+    const touching = (S, O) => S.samples.some(({ p }) => O.samples.some((q) => D(p, q.p) < tol * 1.2));
+    for (const [dot, other, sign] of [[A, B, -1], [B, A, 1]]) {
+      if (!isDot(dot) || isDot(other) || !touching(dot, other)) continue;
+      const cx = (dot.x0 + dot.x1) / 2, cy = (dot.y0 + dot.y1) / 2;
+      const leads = cy < other.start[1] + tol * .5 || cx < other.x0;
+      return leads ? sign : -sign;
+    }
+  }
   if (!A.samples.length && !B.samples.length) {
     // Whole parts: one that starts below the middle of the other is written
     // after it — the final consonant (받침) after the vowel, 皿 under 血.
@@ -599,6 +631,8 @@ function orderCharacter(strokes, tol) {
     const seq = (list) => list.flatMap((p) => orderUnits(p.list, tol).map((i) => p.list[i]));
     return [...seq(above), ...inner.slice(0, cut), ...seq(rest.filter((p) => side(p) === 'left')), ...inner.slice(cut), ...seq(rest.filter((p) => side(p) === 'right'))];
   }
+  const exitLast = (list) => [...list.filter((s) => !s.exit), ...list.filter((s) => s.exit)];
+  if (strokes.some((s) => s.exit)) return exitLast(ordered.flatMap((part) => orderUnits(part.list, tol).map((i) => part.list[i])));
   return ordered.flatMap((part) => {
     if (cursive && part === biggest) {
       // One unbroken movement through the word, left to right.
@@ -706,7 +740,14 @@ function readingOrder(strokes, boxes, vertical, tol) {
   }
   return [...groups.entries()]
     .sort(([a], [b]) => { const [al, ac] = a.split(':').map(Number), [bl, bc] = b.split(':').map(Number); return al - bl || ac - bc; })
-    .flatMap(([, list]) => orderCharacter(list, tol));
+    .map(([, list]) => orderCharacter(list, tol))
+    .flatMap((list, i, chars) => {
+      // 連筆: after a stroke that trails into the next character, the brush
+      // carries on without lifting.
+      const prev = chars[i - 1];
+      if (prev && prev[prev.length - 1]?.exit && list[0]) list[0].flow = true;
+      return list;
+    });
 }
 
 // ------------------------------------------------- one stroke, one movement
@@ -720,27 +761,45 @@ function assignPixels(strokes, mask, w, h, halo) {
   const dir = new Float32Array(n);
   const dist = new Float32Array(n).fill(1e9);
   for (let p = 0; p < n; p++) if (mask[p]) owner[p] = -1;
+  // Each stroke claims the ink its brush actually covered — discs as wide as
+  // the ink along its centre line (the medial-axis reconstruction) — in
+  // writing order, so where strokes overlap the ink belongs to the stroke that
+  // laid it first. A pixel appears when the brush first touches it.
+  const ink = distance(mask, w, h);
   strokes.forEach((s, si) => {
     const pts = s.map;
     let run = 0;
     for (let i = 0; i < pts.length; i++) {
       const a = pts[i], b = pts[Math.min(pts.length - 1, i + 1)];
       const seg = D(a, b);
-      const steps = Math.max(1, Math.ceil(seg * 2));
+      const steps = Math.max(1, Math.ceil(seg * 1.4));
       const angle = Math.atan2(b[1] - a[1], b[0] - a[0]);
       for (let k = 0; k < steps; k++) {
         const t = k / steps;
-        const x = Math.round(a[0] + (b[0] - a[0]) * t), y = Math.round(a[1] + (b[1] - a[1]) * t);
-        if (x < 0 || y < 0 || x >= w || y >= h) continue;
-        const p = y * w + x;
-        if (dist[p] === 0) continue; // an earlier stroke already passed here
-        dist[p] = 0; owner[p] = si; arc[p] = Math.min(1, (run + seg * t) / (s.mapLength || 1)); dir[p] = angle;
+        const cx = a[0] + (b[0] - a[0]) * t, cy = a[1] + (b[1] - a[1]) * t;
+        const ix = Math.round(cx), iy = Math.round(cy);
+        if (ix < 0 || iy < 0 || ix >= w || iy >= h) continue;
+        const at = Math.min(1, (run + seg * t) / (s.mapLength || 1));
+        const rr = Math.max(1.5, ink[iy * w + ix] * 1.12 + .6);
+        const R = Math.ceil(rr);
+        for (let y = Math.max(0, iy - R); y <= Math.min(h - 1, iy + R); y++) {
+          for (let x = Math.max(0, ix - R); x <= Math.min(w - 1, ix + R); x++) {
+            const dx = x - cx, dy = y - cy;
+            if (dx * dx + dy * dy > rr * rr) continue;
+            const p = y * w + x;
+            if (!mask[p]) continue;
+            if (owner[p] >= 0 && owner[p] !== si) continue; // laid by an earlier stroke
+            if (owner[p] === si && arc[p] <= at) continue;
+            owner[p] = si; arc[p] = at; dir[p] = angle; dist[p] = 0;
+          }
+        }
       }
       run += seg;
       if (i === pts.length - 1) break;
     }
   });
-  const limit = (p, d, o) => (mask[p] ? true : d <= strokes[o].mapRadius + halo);
+  // Claimed ink starts at distance 0, so the halo is measured from the ink's edge.
+  const limit = (p, d) => (mask[p] ? true : d <= halo);
   const relax = (p, q, wgt) => {
     const o = owner[q];
     if (o < 0) return false;
@@ -774,6 +833,102 @@ function assignPixels(strokes, mask, w, h, halo) {
   return { owner, arc, dir };
 }
 
+// ------------------------------------------------------------ stroke plans
+// A hand-authored plan (stroke-plans.js) replaces automatic ordering when its
+// paths, mapped onto this image's ink, really lie on the ink and cover it.
+function applyPlan(plan, { mask, skeleton, w, h, r, radiusAt, comp }) {
+  let bx0 = 1e9, by0 = 1e9, bx1 = -1, by1 = -1;
+  for (let i = 0; i < mask.length; i++) {
+    if (!mask[i]) continue;
+    const x = i % w - 1, y = (i - (i % w)) / w - 1;
+    if (x < bx0) bx0 = x; if (x > bx1) bx1 = x; if (y < by0) by0 = y; if (y > by1) by1 = y;
+  }
+  const bw = bx1 - bx0, bh = by1 - by0, g = plan.grid;
+  if (bw <= 0 || bh <= 0) return null;
+  if (Math.abs(Math.log((bw / bh) / (plan.aspect || (g.x1 - g.x0) / (g.y1 - g.y0)))) > .16) return null;
+  const place = ([x, y]) => [bx0 + ((x - g.x0) / (g.x1 - g.x0)) * bw, by0 + ((y - g.y0) / (g.y1 - g.y0)) * bh];
+  const snapR = Math.max(r * 2.5, Math.max(bw, bh) * .045);
+  const cell = Math.max(4, Math.round(snapR));
+  const buckets = new Map();
+  const skel = [];
+  for (let i = 0; i < skeleton.length; i++) {
+    if (!skeleton[i]) continue;
+    const p = [i % w - 1, (i - (i % w)) / w - 1];
+    skel.push(p);
+    const k = `${Math.floor(p[0] / cell)},${Math.floor(p[1] / cell)}`;
+    if (!buckets.has(k)) buckets.set(k, []);
+    buckets.get(k).push(p);
+  }
+  // Snap to the centre line, preferring points that continue the path from
+  // the previous snapped point, so a path crossing another stroke stays on
+  // its own line instead of sliding onto the other one.
+  const nearest = (P, prev, stepLen) => {
+    const cx = Math.floor(P[0] / cell), cy = Math.floor(P[1] / cell);
+    let best = null, bc = Infinity;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      for (const q of buckets.get(`${cx + dx},${cy + dy}`) || []) {
+        const d = D(P, q);
+        if (d > snapR) continue;
+        const cost = d + (prev ? Math.abs(D(prev, q) - stepLen) * .6 : 0);
+        if (cost < bc) { bc = cost; best = q; }
+      }
+    }
+    return best;
+  };
+  const onInk = ([x, y]) => mask[Math.round(y + 1) * w + Math.round(x + 1)] === 1;
+  let hits = 0, total = 0;
+  const step = Math.max(2, r * .8);
+  const strokes = plan.strokes.map((ps) => {
+    const raw = ps.path.map(place);
+    const dense = [raw[0]];
+    for (let i = 1; i < raw.length; i++) {
+      const n = Math.max(1, Math.ceil(D(raw[i - 1], raw[i]) / step));
+      for (let k = 1; k <= n; k++) dense.push([raw[i - 1][0] + (raw[i][0] - raw[i - 1][0]) * k / n, raw[i - 1][1] + (raw[i][1] - raw[i - 1][1]) * k / n]);
+    }
+    let prev = null;
+    let pts = dense.map((P, i) => {
+      total++;
+      const q = nearest(P, prev, i ? D(P, dense[i - 1]) : 0);
+      if (q || onInk(P)) hits++;
+      prev = q ? [...q] : P;
+      return prev;
+    });
+    pts = smoothPoints(pts, false).filter((p, i, a) => !i || D(p, a[i - 1]) > .3);
+    return { pts: pts.length > 1 ? pts : [pts[0], [pts[0][0] + .1, pts[0][1]]], plan: ps };
+  });
+  if (hits / total < .8) return null;
+  // The plan must also account for the ink: most of the centre line is near a planned path.
+  const planBuckets = new Map();
+  strokes.forEach((s) => s.pts.forEach((p) => {
+    const k = `${Math.floor(p[0] / cell)},${Math.floor(p[1] / cell)}`;
+    if (!planBuckets.has(k)) planBuckets.set(k, []);
+    planBuckets.get(k).push(p);
+  }));
+  let covered = 0;
+  for (const p of skel) {
+    const cx = Math.floor(p[0] / cell), cy = Math.floor(p[1] / cell);
+    let ok = false;
+    for (let dy = -1; dy <= 1 && !ok; dy++) for (let dx = -1; dx <= 1 && !ok; dx++) {
+      ok = (planBuckets.get(`${cx + dx},${cy + dy}`) || []).some((q) => D(p, q) < Math.max(r * 2.2, 3));
+    }
+    if (ok) covered++;
+  }
+  const coverage = covered / Math.max(1, skel.length);
+  if (coverage < .7) return null;
+  const score = (hits / total) * coverage;
+  const chars = [...new Set(plan.strokes.map((ps) => ps.char))];
+  return strokes.map(({ pts, plan: ps }) => {
+    const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+    const rs = pts.map(radiusAt).sort((a, b) => a - b);
+    return {
+      pts, start: pts[0], end: pts[pts.length - 1], length: Math.max(1, lengthOf(pts)),
+      x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys),
+      radius: rs[Math.floor(rs.length * .9)] || r, line: 0, char: chars.indexOf(ps.char), flow: Boolean(ps.flow),
+      comp: comp[Math.round(pts[0][1] + 1) * w + Math.round(pts[0][0] + 1)], std: ps.std, name: ps.name,
+    };
+  }).map((s, i, all) => Object.assign(s, i ? {} : { score })); // the first stroke carries the match score
+}
+
 const MAP_SIDE = 1100;
 
 export async function analyzeInk(url, debug) {
@@ -791,10 +946,28 @@ export async function analyzeInk(url, debug) {
   const { comp, boxes } = label(mask, w, h);
   const minArea = Math.max(14, w * h * .00012);
   for (let i = 0; i < mask.length; i++) if (mask[i] && boxes[comp[i]].area < minArea) mask[i] = 0;
-  const dist = distance(mask, w, h);
+  let dist = distance(mask, w, h);
+  // Dry-brush pinholes inside a stroke are not counters (ㅇ, 口): fill holes much
+  // smaller than the brush so they do not split the centre line into loops.
+  {
+    const inside = []; for (let i = 0; i < mask.length; i++) if (mask[i]) inside.push(dist[i]);
+    inside.sort((a, b) => a - b);
+    const brush = inside[Math.floor(inside.length * .9)] || 2;
+    const holes = label(Uint8Array.from(mask, (v) => 1 - v), w, h);
+    let filled = false;
+    holes.boxes.forEach((b) => {
+      const touchesEdge = b.x0 === 0 || b.y0 === 0 || b.x1 === w - 1 || b.y1 === h - 1;
+      if (!touchesEdge && b.area < brush * brush * 1.6) { b.fill = true; filled = true; }
+    });
+    if (filled) {
+      for (let i = 0; i < mask.length; i++) if (!mask[i] && holes.boxes[holes.comp[i]]?.fill) mask[i] = 1;
+      dist = distance(mask, w, h);
+    }
+  }
   const skeleton = Uint8Array.from(mask);
   thin(skeleton, w, h);
   const { edges, cluster, degree } = traceSkeleton(skeleton, w, h);
+  if (debug) { debug.w = w; debug.h = h; debug.mask = Array.from(mask); debug.skeleton = Array.from(skeleton); }
   const radiusAt = ([x, y]) => dist[Math.round(y + 1) * w + Math.round(x + 1)] || 1;
   const radii = [];
   for (let i = 0; i < skeleton.length; i++) if (skeleton[i]) radii.push(dist[i]);
@@ -822,8 +995,56 @@ export async function analyzeInk(url, debug) {
       out.samples = sampleBody(out, Math.max(1, r * .6));
       return out;
     });
+  // A piece shorter than the brush is wide is part of a neighbouring stroke's
+  // blot (a pressed corner, an overlap), not a movement of its own. Dropping
+  // its centre line lets its ink join the stroke it touches.
+  const perComp = new Map();
+  strokes.forEach((s) => perComp.set(s.comp, (perComp.get(s.comp) || 0) + 1));
+  strokes = strokes.filter((s) => {
+    if (s.ring || perComp.get(s.comp) < 2) return true;
+    if (s.length >= s.radius * 2 * 1.35) return true;
+    const near = (P) => strokes.some((o) => o !== s && o.comp === s.comp && o.pts.some((q) => D(P, q) < Math.max(o.radius, s.radius) * 1.3));
+    if (!near(s.start) || !near(s.end)) return true; // a heavy dot or tick with a free end stays
+    perComp.set(s.comp, perComp.get(s.comp) - 1);
+    return false;
+  });
   const tol = Math.max(2.5, r * 1.7);
-  strokes = readingOrder(strokes, boxes, H > W * 1.3, tol);
+  const core = Uint8Array.from(mask, (v, i) => (v && dist[i] > Math.max(1, r * .42) ? 1 : 0));
+  const coreParts = label(core, w, h);
+  const partOf = (s, fromEnd = false) => {
+    const pts = fromEnd ? [...s.pts].reverse() : s.pts;
+    for (const [x, y] of pts) { const id = coreParts.comp[Math.round(y + 1) * w + Math.round(x + 1)]; if (id >= 0) return id; }
+    return -1;
+  };
+  strokes.forEach((s) => {
+    const id = partOf(s);
+    if (id >= 0) s.comp = boxes.length + id; // part ids live after the ink components
+    // A stroke whose late section thins to a hairline runs on into the next character.
+    const rs = s.pts.map(radiusAt);
+    const sorted = [...rs].sort((a, b) => a - b);
+    const med = sorted[Math.floor(rs.length * .75)] || 1; // the stroke's body, not its thread
+    // A connecting thread is a thin run that is followed by heavy ink again
+    // (the next character's first stroke); a tapering tail never recovers.
+    let run = 0, threadEnd = -1;
+    rs.forEach((v, i) => {
+      if (i > rs.length * .35 && v < med * .55) { run++; return; }
+      if (run > Math.max(3, med * .8)) threadEnd = i;
+      run = 0;
+    });
+    const thread = threadEnd >= 0 && rs.slice(threadEnd).some((v) => v > med * .6);
+    // …and the heavy ink after it belongs to another body of ink (the next
+    // character), not to the same stroke swelling again (宀's long sweep).
+    const endPart = partOf(s, true);
+    s.exit = thread && endPart >= 0 && endPart !== id;
+  });
+  const partBoxes = [...boxes, ...coreParts.boxes.map((b) => ({ ...b, id: boxes.length + b.id }))];
+  // Every plan is tried; the one that fits this ink best wins (安心 and 安全 share 安).
+  let plan = null, best = 0;
+  for (const candidate of STROKE_PLANS) {
+    const planned = applyPlan(candidate, { mask, skeleton, w, h, r, radiusAt, comp });
+    if (planned && planned[0].score > best) { best = planned[0].score; strokes = planned; plan = candidate; }
+  }
+  if (!plan) strokes = readingOrder(strokes, partBoxes, H > W * 1.3, tol);
 
   // Pixel ownership on a finer map, in image space.
   const ms = Math.min(1, MAP_SIDE / Math.max(W, H));
@@ -851,7 +1072,8 @@ export async function analyzeInk(url, debug) {
   return {
     width: W, height: H,
     strokeWidth: 2 * r * toImage,
-    strokes: strokes.map((s) => ({ points: s.image, cum: s.cum, length: s.imageLength, line: s.line, char: s.char, comp: s.comp, flow: Boolean(s.flow), ring: Boolean(s.ring) })),
+    plan: plan ? { id: plan.id, word: plan.word, status: plan.status } : null,
+    strokes: strokes.map((s) => ({ points: s.image, cum: s.cum, length: s.imageLength, line: s.line, char: s.char, comp: s.comp, flow: Boolean(s.flow), ring: Boolean(s.ring), name: s.name, std: s.std })),
     map: { width: mw, height: mh, owner, arc, dir },
   };
 }
